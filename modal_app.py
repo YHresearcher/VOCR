@@ -48,6 +48,9 @@ def run_train(test_run: bool = False):
     import subprocess
     print("Bắt đầu khởi chạy Job huấn luyện tiếng Việt (PP-OCRv5-server)...")
     
+    # Reload volume để đồng bộ dữ liệu mới nhất
+    vol.reload()
+    
     # Kiểm tra xem dữ liệu huấn luyện có tồn tại trong Volume không
     if not os.path.exists("/vol/train_data"):
         print("CẢNH BÁO: Không tìm thấy thư mục /vol/train_data. Vui lòng tải dữ liệu huấn luyện lên volume trước.")
@@ -89,6 +92,9 @@ def run_export():
     import subprocess
     print("Bắt đầu export model sang định dạng inference...")
     
+    # Reload volume để lấy checkpoint mới nhất
+    vol.reload()
+    
     best_model_path = "/vol/output/vi_PP-OCRv5_server_rec/best_accuracy"
     
     if not os.path.exists(best_model_path + ".pdparams"):
@@ -123,6 +129,9 @@ def ocr_webhook(item: dict):
     import cv2
     
     custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+    
+    # Reload volume trước khi phục vụ yêu cầu để nhận mô hình mới nếu có
+    vol.reload()
     
     # Kiểm tra xem mô hình fine-tune đã được export trong Volume chưa
     if os.path.exists(custom_model_dir) and os.listdir(custom_model_dir):
@@ -282,9 +291,10 @@ def prepare_dataset():
                 pass
             return
             
-    # 5. Lập trình cropping logic bằng thư mục tạm local `/tmp/crops` để tăng tốc độ ghi (gấp 1000 lần)
+    # 5. Lập trình cropping logic đa luồng (multi-threaded) bằng thư mục tạm local `/tmp/crops` để tăng tốc gấp 10 lần
     import cv2
     import shutil
+    from concurrent.futures import ThreadPoolExecutor
     
     labels_dir = os.path.join(extract_dir, "vietnamese", "labels")
     train_imgs_dir = os.path.join(extract_dir, "vietnamese", "train_images")
@@ -297,26 +307,22 @@ def prepare_dataset():
     train_list_path = "/vol/train_data/train_list.txt"
     val_list_path = "/vol/train_data/val_list.txt"
     
-    train_lines = []
-    val_lines = []
-    
     if not os.path.exists(labels_dir):
         print(f"Lỗi: Không tìm thấy thư mục nhãn tại {labels_dir}")
         return
         
     label_files = sorted(os.listdir(labels_dir))
-    print(f"Bắt đầu xử lý {len(label_files)} tệp nhãn và ghi ảnh cục bộ (local SSD)...", flush=True)
+    print(f"Bắt đầu xử lý {len(label_files)} tệp nhãn đa luồng (16 threads) để tăng tốc...", flush=True)
     
-    crop_idx = 0
-    for l_file in label_files:
+    def process_label_file(l_file):
         if not l_file.startswith("gt_") or not l_file.endswith(".txt"):
-            continue
+            return []
             
         try:
             n_str = l_file[3:-4]
             N = int(n_str)
         except ValueError:
-            continue
+            return []
             
         img_name = f"im{N:04d}.jpg"
         if 1 <= N <= 1200:
@@ -326,14 +332,14 @@ def prepare_dataset():
             img_path = os.path.join(test_imgs_dir, img_name)
             is_train = False
         else:
-            continue
+            return []
             
         if not os.path.exists(img_path):
-            continue
+            return []
             
         img = cv2.imread(img_path)
         if img is None:
-            continue
+            return []
             
         h, w = img.shape[:2]
         
@@ -342,9 +348,9 @@ def prepare_dataset():
             with open(label_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
         except Exception as e:
-            print(f"Lỗi đọc {label_path}: {e}", flush=True)
-            continue
+            return []
             
+        file_records = []
         for line_idx, line in enumerate(lines):
             line = line.strip()
             if not line:
@@ -381,15 +387,25 @@ def prepare_dataset():
             cv2.imwrite(crop_path, crop_img)
             
             record = f"crops/{crop_name}\t{transcript}\n"
+            file_records.append((is_train, record))
+            
+        return file_records
+        
+    train_lines = []
+    val_lines = []
+    
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        results = list(executor.map(process_label_file, label_files))
+        
+    crop_idx = 0
+    for res in results:
+        for is_train, record in res:
             if is_train:
                 train_lines.append(record)
             else:
                 val_lines.append(record)
-                
             crop_idx += 1
-            if crop_idx % 10000 == 0:
-                print(f"Đã cắt được {crop_idx} từ...", flush=True)
-                
+            
     print(f"Xử lý xong! Đã tạo {crop_idx} ảnh cắt cục bộ tại {local_crops_dir}.", flush=True)
     
     # 6. Đóng gói thư mục tạm thành tệp ZIP
@@ -432,3 +448,8 @@ def prepare_dataset():
     print(f"Tổng số ảnh cropped cho Train: {len(train_lines)}", flush=True)
     print(f"Tổng số ảnh cropped cho Val: {len(val_lines)}", flush=True)
     print(f"Đã ghi nhãn vào {train_list_path} và {val_list_path}", flush=True)
+    
+    # Commit các thay đổi lên Volume để các task khác (như train/export) nhìn thấy
+    print("Đang commit các thay đổi lên Volume...", flush=True)
+    vol.commit()
+    print("Commit hoàn tất.", flush=True)
