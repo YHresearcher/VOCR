@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="VietOCR Portal - Công cụ trực tuyến sử dụng trí tuệ nhân tạo để nhận dạng chữ viết Tiếng Việt nhanh chóng và chính xác.">
+    <title>VietOCR Portal - Nhận Dạng Chữ Tiếng Việt</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom Stylesheet -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="background-decor">
+        <div class="blob blob-1"></div>
+        <div class="blob blob-2"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="logo">
+                <i class="fa-solid fa-brain logo-icon"></i>
+                <span class="logo-text">Viet<span class="gradient-text">OCR</span> Portal</span>
+            </div>
+            <div class="api-status" id="api-status-badge">
+                <span class="status-indicator pinging"></span>
+                <span class="status-label">Đang kiểm tra API...</span>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="main-workspace">
+            <!-- Left Side: Upload and Image Preview -->
+            <section class="workspace-card upload-section">
+                <h1 class="section-title"><i class="fa-solid fa-image-portrait"></i> Tải ảnh tài liệu</h1>
+                <p class="section-subtitle">Hỗ trợ các định dạng PNG, JPG, JPEG. Xử lý thời gian thực qua serverless GPU.</p>
+                
+                <div class="dropzone" id="upload-dropzone">
+                    <input type="file" id="file-input" accept="image/*" class="file-input-hidden">
+                    <div class="dropzone-content" id="dropzone-default">
+                        <i class="fa-solid fa-cloud-arrow-up upload-icon"></i>
+                        <p class="upload-text">Kéo và thả ảnh vào đây hoặc <span>chọn từ máy tính</span></p>
+                        <p class="upload-limit">Kích thước tối đa: 10MB</p>
+                    </div>
+                    <div class="dropzone-preview hidden" id="dropzone-preview">
+                        <img id="image-element" src="#" alt="Preview">
+                        <button type="button" class="btn-remove" id="btn-remove-image" title="Xóa ảnh">
+                            <i class="fa-solid fa-xmark"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="action-bar">
+                    <button type="button" class="btn btn-primary" id="btn-process" disabled>
+                        <i class="fa-solid fa-wand-magic-sparkles"></i> Nhận dạng chữ (OCR)
+                    </button>
+                </div>
+            </section>
+
+            <!-- Right Side: Results -->
+            <section class="workspace-card result-section">
+                <div class="result-header">
+                    <h2 class="section-title"><i class="fa-solid fa-square-poll-horizontal"></i> Kết quả nhận dạng</h2>
+                    <div class="tabs" id="result-tabs">
+                        <button type="button" class="tab-btn active" data-tab="plain-text" id="tab-btn-plain">Văn bản</button>
+                        <button type="button" class="tab-btn" data-tab="lines-view" id="tab-btn-lines">Từng dòng</button>
+                        <button type="button" class="tab-btn" data-tab="json-view" id="tab-btn-json">JSON</button>
+                    </div>
+                </div>
+
+                <div class="result-body">
+                    <!-- Loading Overlay -->
+                    <div class="loading-overlay hidden" id="loading-overlay">
+                        <div class="spinner"></div>
+                        <p class="loading-title">Đang xử lý nhận dạng chữ...</p>
+                        <p class="loading-subtitle">Quá trình này có thể mất vài giây trên GPU.</p>
+                    </div>
+
+                    <!-- Empty State -->
+                    <div class="empty-state" id="result-empty">
+                        <i class="fa-solid fa-magnifying-glass-chart empty-icon"></i>
+                        <p class="empty-title">Chưa có dữ liệu nhận dạng</p>
+                        <p class="empty-subtitle">Hãy tải ảnh tài liệu lên ở khung bên trái và nhấn "Nhận dạng chữ" để bắt đầu.</p>
+                    </div>
+
+                    <!-- Tab Contents -->
+                    <div class="tab-content active" id="tab-plain-text">
+                        <div class="text-editor-container">
+                            <textarea id="text-output" readonly placeholder="Kết quả văn bản sẽ hiển thị ở đây..."></textarea>
+                            <button type="button" class="btn-copy" id="btn-copy-text" title="Sao chép văn bản">
+                                <i class="fa-regular fa-copy"></i> Sao chép
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="tab-content" id="tab-lines-view">
+                        <div class="lines-list-container" id="lines-list">
+                            <!-- Lines will be dynamically generated here -->
+                        </div>
+                    </div>
+
+                    <div class="tab-content" id="tab-json-view">
+                        <pre class="json-code-container"><code id="json-output">// Dữ liệu JSON raw từ API</code></pre>
+                    </div>
+                </div>
+
+                <!-- Footer Action Area -->
+                <div class="result-footer hidden" id="result-footer">
+                    <div class="stats-row">
+                        <div class="stat-item">
+                            <span class="stat-label">Số dòng:</span>
+                            <span class="stat-value" id="stat-lines-count">0</span>
+                        </div>
+                        <div class="stat-item">
+                            <span class="stat-label">Thời gian:</span>
+                            <span class="stat-value" id="stat-time">0.0s</span>
+                        </div>
+                    </div>
+                    <div class="export-actions">
+                        <button type="button" class="btn btn-secondary" id="btn-download-txt">
+                            <i class="fa-solid fa-file-arrow-down"></i> Tải file .txt
+                        </button>
+                        <button type="button" class="btn btn-secondary" id="btn-download-json">
+                            <i class="fa-solid fa-file-code"></i> Tải file .json
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Page Footer -->
+        <footer class="app-footer">
+            <p>&copy; 2026 VietOCR Portal. Công nghệ lõi: EasyOCR (Phát hiện) & VietOCR (Nhận dạng) chạy trên Modal GPU Cloud.</p>
+        </footer>
+    </div>
+
+    <!-- Notification Toast -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Custom Script -->
+    <script src="app.js"></script>
+</body>
+</html>
