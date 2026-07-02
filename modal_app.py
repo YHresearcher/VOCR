@@ -7,10 +7,14 @@ app = modal.App("viet-ocr-server")
 # Định nghĩa môi trường chạy: Cài đặt PaddleOCR, CUDA, các gói dependencies 
 # và đồng bộ mã nguồn cục bộ vào container (bỏ qua các thư mục không cần thiết).
 ocr_image = (
-    modal.Image.debian_slim(python_version="3.10")
-    .apt_install("libgl1", "libglib2.0-0")
+    modal.Image.from_registry("nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04")
+    .apt_install("python3-pip", "python3-dev", "libgl1", "libglib2.0-0", "git")
+    .run_commands("ln -sf /usr/bin/python3 /usr/bin/python")
+    .env({
+        "LD_LIBRARY_PATH": "/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
+    })
     .pip_install(
-        "paddlepaddle-gpu==2.6.0", # Cài đặt Paddle tương thích với T4/CUDA 12
+        "paddlepaddle-gpu==2.6.0", # Cài đặt Paddle tương thích với T4/CUDA 11.8
         "imaug",
         "fastapi[standard]", # Bắt buộc cho các hàm fastapi_endpoint trong các bản Modal mới
         "gdown" # Sử dụng để tải tệp lớn từ Google Drive một cách tin cậy
@@ -62,7 +66,6 @@ def run_train(test_run: bool = False):
         "python", "tools/train.py",
         "-c", "configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml",
         "-o", "Global.save_model_dir=/vol/output/vi_PP-OCRv5_server_rec",
-        "Global.pretrained_model=/vol/pretrain_models/latin_PP-OCRv5_mobile_rec_pretrained",
         "Train.dataset.data_dir=/vol/train_data/",
         "Train.dataset.label_file_list=[/vol/train_data/train_list.txt]",
         "Eval.dataset.data_dir=/vol/train_data/",
@@ -187,28 +190,52 @@ def test_env():
     print("=== ENVIRONMENT DIAGNOSTICS ===")
     print("Python version:", sys.version)
     print("Working directory:", os.getcwd())
-    print("Mounted files in root:", os.listdir("."))
     
-    train_py_exists = os.path.exists("tools/train.py")
-    config_exists = os.path.exists("configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml")
-    dict_exists = os.path.exists("ppocr/utils/dict/vi_custom_dict.txt")
-    print(f"tools/train.py exists: {train_py_exists}")
-    print(f"configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml exists: {config_exists}")
-    print(f"ppocr/utils/dict/vi_custom_dict.txt exists: {dict_exists}")
+    dict_path = "ppocr/utils/dict/vi_custom_dict.txt"
+    train_list_path = "/vol/train_data/train_list.txt"
+    val_list_path = "/vol/train_data/val_list.txt"
     
-    try:
-        import paddle
-        print("PaddlePaddle version:", paddle.__version__)
-        print("PaddlePaddle CUDA compiled:", paddle.is_compiled_with_cuda())
-        print("PaddlePaddle GPU device count:", paddle.device.cuda.device_count())
-    except Exception as e:
-        print("Lỗi import paddle hoặc kiểm tra CUDA:", str(e))
+    # Đồng bộ volume mới nhất
+    vol.reload()
+    
+    # 1. Đọc từ điển
+    if not os.path.exists(dict_path):
+        print(f"Lỗi: Không tìm thấy từ điển tại {dict_path}")
+        return
         
-    print("Volume contents under /vol:")
-    try:
-        print(os.listdir("/vol"))
-    except Exception as e:
-        print("Lỗi đọc /vol:", str(e))
+    with open(dict_path, "r", encoding="utf-8") as f:
+        dict_chars = set(f.read().splitlines())
+    # Thêm khoảng trắng vì nó thường là ký tự hợp lệ
+    dict_chars.add(" ")
+    print(f"Từ điển có {len(dict_chars)} ký tự.")
+    
+    # 2. Đọc nhãn train và val
+    missing_chars = set()
+    total_labels = 0
+    
+    for list_path in [train_list_path, val_list_path]:
+        if not os.path.exists(list_path):
+            print(f"Không tìm thấy nhãn tại {list_path}")
+            continue
+            
+        print(f"Đang kiểm tra {list_path}...")
+        with open(list_path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split("\t", 1)
+                if len(parts) < 2:
+                    continue
+                transcript = parts[1]
+                total_labels += 1
+                for char in transcript:
+                    if char not in dict_chars:
+                        missing_chars.add(char)
+                        
+    print(f"Đã kiểm tra tổng cộng {total_labels} nhãn.")
+    if missing_chars:
+        print(f"CẢNH BÁO: Phát hiện {len(missing_chars)} ký tự trong nhãn NHƯNG KHÔNG CÓ trong từ điển:")
+        print(repr(sorted(list(missing_chars))))
+    else:
+        print("Tất cả ký tự trong nhãn đều tồn tại trong từ điển!")
 
 # 5. Hàm tự động tải và chuẩn bị dữ liệu (VinText & Pretrained Weights)
 @app.function(

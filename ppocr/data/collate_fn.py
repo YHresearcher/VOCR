@@ -34,7 +34,17 @@ class DictCollator(object):
                         to_tensor_keys.append(k)
                 data_dict[k].append(v)
         for k in to_tensor_keys:
-            data_dict[k] = paddle.to_tensor(data_dict[k])
+            val = data_dict[k]
+            if isinstance(val[0], np.ndarray):
+                stacked = np.stack(val, axis=0)
+            else:
+                stacked = np.array(val)
+            # Ensure correct dtypes: int→int64, float→float32
+            if np.issubdtype(stacked.dtype, np.integer):
+                stacked = stacked.astype(np.int64)
+            elif np.issubdtype(stacked.dtype, np.floating):
+                stacked = stacked.astype(np.float32)
+            data_dict[k] = stacked
         return data_dict
 
 
@@ -54,8 +64,19 @@ class ListCollator(object):
                         to_tensor_idxs.append(idx)
                 data_dict[idx].append(v)
         for idx in to_tensor_idxs:
-            data_dict[idx] = paddle.to_tensor(data_dict[idx])
+            val = data_dict[idx]
+            if isinstance(val[0], np.ndarray):
+                stacked = np.stack(val, axis=0)
+            else:
+                stacked = np.array(val)
+            # Ensure correct dtypes: int→int64, float→float32
+            if np.issubdtype(stacked.dtype, np.integer):
+                stacked = stacked.astype(np.int64)
+            elif np.issubdtype(stacked.dtype, np.floating):
+                stacked = stacked.astype(np.float32)
+            data_dict[idx] = stacked
         return list(data_dict.values())
+
 
 
 class SSLRotateCollate(object):

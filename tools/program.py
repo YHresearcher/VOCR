@@ -331,6 +331,46 @@ def train(
                 train_dataloader.batch_sampler.set_epoch(0)
 
         for idx, batch in enumerate(train_dataloader):
+            # ---- STEP 1: what raw type/dtype does DataLoader give us? ----
+            if idx == 0:
+                for i, item in enumerate(batch):
+                    t = type(item).__name__
+                    dt = getattr(item, 'dtype', 'N/A')
+                    sh = getattr(item, 'shape', 'N/A')
+                    print(f"[RAW_BATCH] [{i}] type={t} dtype={dt} shape={sh}", flush=True)
+
+            # Explicitly move batch tensors to the training device (GPU).
+            # DataLoader uses CPUPlace; we do a reliable explicit copy here.
+            gpu_batch = []
+            for item in batch:
+                if isinstance(item, np.ndarray):
+                    if np.issubdtype(item.dtype, np.integer):
+                        item = item.astype(np.int64)
+                    elif np.issubdtype(item.dtype, np.floating):
+                        item = item.astype(np.float32)
+                    gpu_batch.append(paddle.to_tensor(item, place=device))
+                elif isinstance(item, paddle.Tensor):
+                    # Use numpy() round-trip to guarantee correct device placement
+                    arr = item.numpy()
+                    if np.issubdtype(arr.dtype, np.integer):
+                        arr = arr.astype(np.int64)
+                    elif np.issubdtype(arr.dtype, np.floating):
+                        arr = arr.astype(np.float32)
+                    gpu_batch.append(paddle.to_tensor(arr, place=device))
+                else:
+                    gpu_batch.append(item)
+            batch = gpu_batch
+
+            # ---- STEP 2: verify GPU batch values ----
+            if idx == 0:
+                for i, item in enumerate(batch):
+                    if isinstance(item, paddle.Tensor):
+                        try:
+                            vals = item.flatten().numpy().tolist()[:6]
+                        except Exception as e:
+                            vals = str(e)
+                        print(f"[GPU_BATCH] [{i}] dtype={item.dtype} place={item.place} shape={item.shape} vals={vals}", flush=True)
+
             model.train()
             profiler.add_profiler_step(profiler_options)
             train_reader_cost += time.time() - reader_start

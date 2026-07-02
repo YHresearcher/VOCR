@@ -119,7 +119,7 @@ class Transformer(nn.Layer):
 
     def forward_train(self, src, tgt):
         tgt = tgt[:, :-1]
-
+        print(f"[EMBED_DIAG] dtype={tgt.dtype} place={tgt.place} shape={tgt.shape} vals={tgt[0].numpy().tolist()[:8]}", flush=True)
         tgt = self.embedding(tgt)
         tgt = self.positional_encoding(tgt)
         tgt_mask = self.generate_square_subsequent_mask(tgt.shape[1])
@@ -150,8 +150,14 @@ class Transformer(nn.Layer):
         """
 
         if self.training:
-            max_len = targets[1].max()
-            tgt = targets[0][:, : 2 + max_len]
+            max_len = int(targets[1].max().item())
+            # Force contiguous int64 tensor — avoids Paddle 2.6 cast bug
+            # where non-contiguous float views are reinterpreted instead of converted.
+            label_gtc = targets[0]
+            if label_gtc.dtype != paddle.int64:
+                label_gtc = paddle.cast(label_gtc, dtype='int64')
+            tgt = label_gtc[:, : 2 + max_len]
+            tgt = paddle.assign(tgt)  # force a contiguous copy in GPU memory
             return self.forward_train(src, tgt)
         else:
             if self.beam_size > 0:
