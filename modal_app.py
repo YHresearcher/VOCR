@@ -83,6 +83,10 @@ def run_train(test_run: bool = False):
     try:
         subprocess.run(cmd, check=True)
         print("Huấn luyện hoàn tất và đã lưu trọng số tại /vol/output/vi_PP-OCRv5_server_rec")
+        # Commit kết quả huấn luyện lên Volume để các task khác (export/webhook) nhìn thấy
+        print("Đang commit kết quả huấn luyện lên Volume...", flush=True)
+        vol.commit()
+        print("Commit huấn luyện hoàn tất.", flush=True)
     except subprocess.CalledProcessError as e:
         print(f"Lỗi trong quá trình huấn luyện: {e}")
 
@@ -114,71 +118,104 @@ def run_export():
     try:
         subprocess.run(cmd, check=True)
         print("Export hoàn tất. Mô hình đã được lưu tại /vol/inference/vi_PP-OCRv5_server_rec")
+        # Commit kết quả export lên Volume để webhook nhìn thấy mô hình mới
+        print("Đang commit kết quả export lên Volume...", flush=True)
+        vol.commit()
+        print("Commit export hoàn tất.", flush=True)
     except subprocess.CalledProcessError as e:
         print(f"Lỗi trong quá trình export model: {e}")
 
-# 3. Hàm Webhook (API): Nhận ảnh base64 và trả về text
-@app.function(
+# 3. OCR Service: Class-based để giữ model trong bộ nhớ GPU giữa các request
+@app.cls(
     image=ocr_image,
     gpu="T4",
-    min_containers=0, # Scale về 0 khi không nhận tải
-    volumes={"/vol": vol}
+    volumes={"/vol": vol},
+    scaledown_window=300  # Giữ container sống 5 phút sau request cuối
 )
-@modal.fastapi_endpoint(method="POST")
-def ocr_webhook(item: dict):
-    from paddleocr import PaddleOCR
-    import base64
-    import numpy as np
-    import cv2
+class OCRService:
+    def __init__(self):
+        self.ocr = None
+        self.model_type = None
     
-    custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
-    
-    # Reload volume trước khi phục vụ yêu cầu để nhận mô hình mới nếu có
-    vol.reload()
-    
-    # Kiểm tra xem mô hình fine-tune đã được export trong Volume chưa
-    if os.path.exists(custom_model_dir) and os.listdir(custom_model_dir):
-        print(f"Đang sử dụng mô hình fine-tuned tại: {custom_model_dir}")
-        ocr = PaddleOCR(
-            use_angle_cls=True,
-            lang="vi",
-            use_gpu=True,
-            rec_model_dir=custom_model_dir,
-            rec_char_dict_path="./ppocr/utils/dict/vi_custom_dict.txt"
-        )
-    else:
-        print("Không tìm thấy mô hình fine-tuned. Sử dụng mô hình tiếng Việt mặc định của PaddleOCR...")
-        ocr = PaddleOCR(
-            use_angle_cls=True,
-            lang="vi",
-            use_gpu=True
-        )
-    
-    if "image_b64" not in item:
-        return {"error": "Missing 'image_b64' field"}
+    @modal.enter()
+    def load_model(self):
+        """Khởi tạo PaddleOCR một lần duy nhất khi container start, thay vì mỗi request."""
+        from paddleocr import PaddleOCR
         
-    try:
-        img_data = base64.b64decode(item["image_b64"])
-        np_arr = np.frombuffer(img_data, np.uint8)
-        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
         
-        if img is None:
-            return {"error": "Failed to decode image from base64"}
+        # Reload volume để nhận mô hình mới nhất
+        vol.reload()
+        
+        if os.path.exists(custom_model_dir) and os.listdir(custom_model_dir):
+            print(f"Đang tải mô hình fine-tuned tại: {custom_model_dir}")
+            self.ocr = PaddleOCR(
+                use_angle_cls=True,
+                lang="vi",
+                use_gpu=True,
+                rec_model_dir=custom_model_dir,
+                rec_char_dict_path="./ppocr/utils/dict/vi_custom_dict.txt"
+            )
+            self.model_type = "fine-tuned"
+        else:
+            print("Không tìm thấy mô hình fine-tuned. Sử dụng mô hình tiếng Việt mặc định...")
+            self.ocr = PaddleOCR(
+                use_angle_cls=True,
+                lang="vi",
+                use_gpu=True
+            )
+            self.model_type = "default"
+        print(f"OCR model đã sẵn sàng (type: {self.model_type})")
+    
+    @modal.fastapi_endpoint(method="POST")
+    def ocr_webhook(self, item: dict):
+        import base64
+        import numpy as np
+        import cv2
+        
+        if "image_b64" not in item:
+            return {"error": "Missing 'image_b64' field"}
+        
+        if self.ocr is None:
+            return {"error": "OCR model not initialized"}
             
-        result = ocr.ocr(img, cls=True)
-        
-        extracted_text = []
-        if result and result[0]:
-            for line in result[0]:
-                extracted_text.append(line[1][0])
+        try:
+            img_data = base64.b64decode(item["image_b64"])
+            np_arr = np.frombuffer(img_data, np.uint8)
+            img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            
+            if img is None:
+                return {"error": "Failed to decode image from base64"}
                 
+            result = self.ocr.ocr(img, cls=True)
+            
+            extracted_text = []
+            if result and result[0]:
+                for line in result[0]:
+                    extracted_text.append(line[1][0])
+                    
+            return {
+                "status": "success",
+                "model_type": self.model_type,
+                "text": "\n".join(extracted_text),
+                "raw_result": result
+            }
+        except Exception as e:
+            return {"error": str(e)}
+    
+    @modal.fastapi_endpoint(method="POST")
+    def reload_model(self):
+        """Reload model từ Volume — dùng sau khi export model mới."""
+        self.load_model()
+        return {"status": "success", "model_type": self.model_type}
+    
+    @modal.fastapi_endpoint(method="GET")
+    def health(self):
         return {
-            "status": "success",
-            "text": "\n".join(extracted_text),
-            "raw_result": result
+            "status": "healthy",
+            "model_type": self.model_type,
+            "model_loaded": self.ocr is not None
         }
-    except Exception as e:
-        return {"error": str(e)}
 
 # 4. Hàm Kiểm tra Môi trường (Diagnostics)
 @app.function(
