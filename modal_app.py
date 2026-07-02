@@ -3,14 +3,34 @@ import modal
 
 app = modal.App("viet-ocr-server")
 
-# Xây dựng môi trường container trên Modal.com (Cài đặt PaddleOCR, CUDA...)
+# Xây dựng môi trường container trên Modal.com
+# Định nghĩa môi trường chạy: Cài đặt PaddleOCR, CUDA, các gói dependencies 
+# và đồng bộ mã nguồn cục bộ vào container (bỏ qua các thư mục không cần thiết).
 ocr_image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("libgl1", "libglib2.0-0")
     .pip_install(
         "paddlepaddle-gpu==2.6.0", # Cài đặt Paddle tương thích với T4/CUDA 12
-        "paddleocr>=2.8.0",
-        "imaug"
+        "imaug",
+        "fastapi[standard]", # Bắt buộc cho các hàm fastapi_endpoint trong các bản Modal mới
+        "gdown" # Sử dụng để tải tệp lớn từ Google Drive một cách tin cậy
+    )
+    .pip_install_from_requirements("requirements.txt")
+    .pip_install("paddleocr>=2.8.0")
+    .add_local_dir(
+        ".",
+        remote_path="/root",
+        ignore=[
+            ".git", 
+            "train_data", 
+            "output", 
+            ".venv", 
+            "__pycache__", 
+            ".idea", 
+            ".gemini", 
+            "artifacts", 
+            "**/*.pyc"
+        ]
     )
 )
 
@@ -24,32 +44,75 @@ vol = modal.Volume.from_name("viet-ocr-vol", create_if_missing=True)
     timeout=86400, # 24 tiếng để training ko bị đứt quãng
     volumes={"/vol": vol}
 )
-def run_train():
+def run_train(test_run: bool = False):
     import subprocess
     print("Bắt đầu khởi chạy Job huấn luyện tiếng Việt (PP-OCRv5-server)...")
     
-    # Mã nguồn sẽ gọi trực tiếp kịch bản train của PaddleOCR với file cấu hình đã tùy chỉnh
+    # Kiểm tra xem dữ liệu huấn luyện có tồn tại trong Volume không
+    if not os.path.exists("/vol/train_data"):
+        print("CẢNH BÁO: Không tìm thấy thư mục /vol/train_data. Vui lòng tải dữ liệu huấn luyện lên volume trước.")
+        print("Hướng dẫn: python -m modal volume put viet-ocr-vol <path_to_local_train_data> train_data")
+        return
+
+    # Gọi trực tiếp kịch bản train của PaddleOCR với các tham số ghi đè sang /vol
     cmd = [
         "python", "tools/train.py",
         "-c", "configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml",
-        # Có thể ghi đè biến môi trường để lưu kết quả trực tiếp lên Modal Volume
-        "-o", "Global.save_model_dir=/vol/output/vi_PP-OCRv5_server_rec"
+        "-o", "Global.save_model_dir=/vol/output/vi_PP-OCRv5_server_rec",
+        "Global.pretrained_model=/vol/pretrain_models/latin_PP-OCRv5_mobile_rec_pretrained",
+        "Train.dataset.data_dir=/vol/train_data/",
+        "Train.dataset.label_file_list=[/vol/train_data/train_list.txt]",
+        "Eval.dataset.data_dir=/vol/train_data/",
+        "Eval.dataset.label_file_list=[/vol/train_data/val_list.txt]"
     ]
     
-    # Chạy mô phỏng 1 epoch cho mục đích kiểm thử nếu chưa có dữ liệu
-    # cmd.extend(["Global.epoch_num=1", "Train.loader.num_workers=0"])
+    if test_run:
+        print("Đang chạy chế độ kiểm thử (test_run=True): Giới hạn 1 epoch và giảm workers...")
+        cmd.extend([
+            "Global.epoch_num=1", 
+            "Train.loader.num_workers=0", 
+            "Eval.loader.num_workers=0"
+        ])
     
     try:
         subprocess.run(cmd, check=True)
-        print("Huấn luyện hoàn tất và đã lưu trọng số.")
+        print("Huấn luyện hoàn tất và đã lưu trọng số tại /vol/output/vi_PP-OCRv5_server_rec")
     except subprocess.CalledProcessError as e:
         print(f"Lỗi trong quá trình huấn luyện: {e}")
 
-# 2. Hàm Webhook (API): Scale về 0 khi không nhận tải, siêu tiết kiệm chi phí
+# 2. Hàm Export Model: Đổi từ checkpoint (.pdparams) sang mô hình suy luận (Inference Model)
+@app.function(
+    image=ocr_image,
+    volumes={"/vol": vol}
+)
+def run_export():
+    import subprocess
+    print("Bắt đầu export model sang định dạng inference...")
+    
+    best_model_path = "/vol/output/vi_PP-OCRv5_server_rec/best_accuracy"
+    
+    if not os.path.exists(best_model_path + ".pdparams"):
+        print(f"Không tìm thấy file checkpoint {best_model_path}.pdparams.")
+        print("Vui lòng huấn luyện model trước khi thực hiện export.")
+        return
+        
+    cmd = [
+        "python", "tools/export_model.py",
+        "-c", "configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml",
+        "-o", f"Global.pretrained_model={best_model_path}",
+        "Global.save_inference_dir=/vol/inference/vi_PP-OCRv5_server_rec"
+    ]
+    try:
+        subprocess.run(cmd, check=True)
+        print("Export hoàn tất. Mô hình đã được lưu tại /vol/inference/vi_PP-OCRv5_server_rec")
+    except subprocess.CalledProcessError as e:
+        print(f"Lỗi trong quá trình export model: {e}")
+
+# 3. Hàm Webhook (API): Nhận ảnh base64 và trả về text
 @app.function(
     image=ocr_image,
     gpu="T4",
-    min_containers=0, # Rất quan trọng cho gói miễn phí (Scale-to-zero)
+    min_containers=0, # Scale về 0 khi không nhận tải
     volumes={"/vol": vol}
 )
 @modal.fastapi_endpoint(method="POST")
@@ -59,19 +122,30 @@ def ocr_webhook(item: dict):
     import numpy as np
     import cv2
     
-    # Khởi tạo OCR với mô hình tiếng Việt. 
-    # Lưu ý: Khi fine-tune xong, cần thay đổi "rec_model_dir" thành đường dẫn tới checkpoint trong /vol
-    ocr = PaddleOCR(
-        use_angle_cls=True,
-        lang="vi",
-        use_gpu=True
-    )
+    custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+    
+    # Kiểm tra xem mô hình fine-tune đã được export trong Volume chưa
+    if os.path.exists(custom_model_dir) and os.listdir(custom_model_dir):
+        print(f"Đang sử dụng mô hình fine-tuned tại: {custom_model_dir}")
+        ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang="vi",
+            use_gpu=True,
+            rec_model_dir=custom_model_dir,
+            rec_char_dict_path="./ppocr/utils/dict/vi_custom_dict.txt"
+        )
+    else:
+        print("Không tìm thấy mô hình fine-tuned. Sử dụng mô hình tiếng Việt mặc định của PaddleOCR...")
+        ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang="vi",
+            use_gpu=True
+        )
     
     if "image_b64" not in item:
         return {"error": "Missing 'image_b64' field"}
         
     try:
-        # Giải mã ảnh base64
         img_data = base64.b64decode(item["image_b64"])
         np_arr = np.frombuffer(img_data, np.uint8)
         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
@@ -79,10 +153,8 @@ def ocr_webhook(item: dict):
         if img is None:
             return {"error": "Failed to decode image from base64"}
             
-        # Chạy dự đoán
         result = ocr.ocr(img, cls=True)
         
-        # Bóc tách text và tọa độ
         extracted_text = []
         if result and result[0]:
             for line in result[0]:
@@ -95,3 +167,268 @@ def ocr_webhook(item: dict):
         }
     except Exception as e:
         return {"error": str(e)}
+
+# 4. Hàm Kiểm tra Môi trường (Diagnostics)
+@app.function(
+    image=ocr_image,
+    volumes={"/vol": vol}
+)
+def test_env():
+    import sys
+    print("=== ENVIRONMENT DIAGNOSTICS ===")
+    print("Python version:", sys.version)
+    print("Working directory:", os.getcwd())
+    print("Mounted files in root:", os.listdir("."))
+    
+    train_py_exists = os.path.exists("tools/train.py")
+    config_exists = os.path.exists("configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml")
+    dict_exists = os.path.exists("ppocr/utils/dict/vi_custom_dict.txt")
+    print(f"tools/train.py exists: {train_py_exists}")
+    print(f"configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml exists: {config_exists}")
+    print(f"ppocr/utils/dict/vi_custom_dict.txt exists: {dict_exists}")
+    
+    try:
+        import paddle
+        print("PaddlePaddle version:", paddle.__version__)
+        print("PaddlePaddle CUDA compiled:", paddle.is_compiled_with_cuda())
+        print("PaddlePaddle GPU device count:", paddle.device.cuda.device_count())
+    except Exception as e:
+        print("Lỗi import paddle hoặc kiểm tra CUDA:", str(e))
+        
+    print("Volume contents under /vol:")
+    try:
+        print(os.listdir("/vol"))
+    except Exception as e:
+        print("Lỗi đọc /vol:", str(e))
+
+# 5. Hàm tự động tải và chuẩn bị dữ liệu (VinText & Pretrained Weights)
+@app.function(
+    image=ocr_image,
+    volumes={"/vol": vol},
+    timeout=3600
+)
+def prepare_dataset():
+    import os
+    import requests
+    import zipfile
+    
+    # Hàm hỗ trợ tải từ Google Drive dùng thư viện gdown cực kỳ ổn định
+    def download_file_from_google_drive(id, destination):
+        import gdown
+        print(f"Đang dùng gdown để tải Google Drive file ID: {id}...")
+        gdown.download(id=id, output=destination, quiet=False)
+    
+    # 1. Tạo các thư mục
+    os.makedirs("/vol/pretrain_models", exist_ok=True)
+    os.makedirs("/vol/train_data", exist_ok=True)
+    
+    # 2. Tải pre-trained weights
+    pretrained_dest = "/vol/pretrain_models/latin_PP-OCRv5_mobile_rec_pretrained.pdparams"
+    if not os.path.exists(pretrained_dest):
+        pretrained_url = "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_pretrained_model/latin_PP-OCRv5_mobile_rec_pretrained.pdparams"
+        print(f"Đang tải pre-trained weights từ {pretrained_url}...")
+        try:
+            r = requests.get(pretrained_url, stream=True)
+            r.raise_for_status()
+            with open(pretrained_dest, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print("Đã tải xong pre-trained weights.")
+        except Exception as e:
+            print(f"Lỗi tải pre-trained weights: {e}")
+            return
+    else:
+        print("Pre-trained weights đã có sẵn.")
+        
+    # 3. Tải bộ dữ liệu VinText
+    zip_dest = "/vol/vintext.zip"
+    extract_dir = "/vol/vintext_extracted"
+    
+    # Kiểm tra xem file zip cũ có bị lỗi không, nếu lỗi thì xóa
+    if os.path.exists(zip_dest):
+        if not zipfile.is_zipfile(zip_dest):
+            print("File zip cũ bị lỗi hoặc không đầy đủ. Đang xóa để tải lại...")
+            try:
+                os.remove(zip_dest)
+            except Exception as e:
+                print(f"Lỗi xóa file zip cũ: {e}")
+    
+    if not os.path.exists(zip_dest) and not os.path.exists(extract_dir):
+        drive_id = "1UUQhNvzgpZy7zXBFQp0Qox-BBjunZ0ml"
+        print("Đang tải bộ dữ liệu VinText (vintext.zip) từ Google Drive...")
+        try:
+            download_file_from_google_drive(drive_id, zip_dest)
+            print("Đã tải xong bộ dữ liệu VinText (vintext.zip).")
+        except Exception as e:
+            print(f"Lỗi tải VinText: {e}")
+            return
+            
+    # 4. Giải nén VinText
+    if os.path.exists(zip_dest) and not os.path.exists(extract_dir):
+        print("Đang giải nén bộ dữ liệu VinText...")
+        try:
+            if not zipfile.is_zipfile(zip_dest):
+                raise ValueError("Tập tin tải xuống không phải là zip hợp lệ. Có thể Google Drive chặn tải.")
+            with zipfile.ZipFile(zip_dest, 'r') as zip_ref:
+                zip_ref.extractall(extract_dir)
+            print("Giải nén hoàn tất.")
+            os.remove(zip_dest)
+        except Exception as e:
+            print(f"Lỗi giải nén: {e}")
+            # Xóa file zip hỏng
+            try:
+                os.remove(zip_dest)
+            except:
+                pass
+            return
+            
+    # 5. Lập trình cropping logic bằng thư mục tạm local `/tmp/crops` để tăng tốc độ ghi (gấp 1000 lần)
+    import cv2
+    import shutil
+    
+    labels_dir = os.path.join(extract_dir, "vietnamese", "labels")
+    train_imgs_dir = os.path.join(extract_dir, "vietnamese", "train_images")
+    test_imgs_dir = os.path.join(extract_dir, "vietnamese", "test_image")
+    
+    local_crops_dir = "/tmp/crops"
+    shutil.rmtree(local_crops_dir, ignore_errors=True)
+    os.makedirs(local_crops_dir, exist_ok=True)
+    
+    train_list_path = "/vol/train_data/train_list.txt"
+    val_list_path = "/vol/train_data/val_list.txt"
+    
+    train_lines = []
+    val_lines = []
+    
+    if not os.path.exists(labels_dir):
+        print(f"Lỗi: Không tìm thấy thư mục nhãn tại {labels_dir}")
+        return
+        
+    label_files = sorted(os.listdir(labels_dir))
+    print(f"Bắt đầu xử lý {len(label_files)} tệp nhãn và ghi ảnh cục bộ (local SSD)...", flush=True)
+    
+    crop_idx = 0
+    for l_file in label_files:
+        if not l_file.startswith("gt_") or not l_file.endswith(".txt"):
+            continue
+            
+        try:
+            n_str = l_file[3:-4]
+            N = int(n_str)
+        except ValueError:
+            continue
+            
+        img_name = f"im{N:04d}.jpg"
+        if 1 <= N <= 1200:
+            img_path = os.path.join(train_imgs_dir, img_name)
+            is_train = True
+        elif 1201 <= N <= 1500:
+            img_path = os.path.join(test_imgs_dir, img_name)
+            is_train = False
+        else:
+            continue
+            
+        if not os.path.exists(img_path):
+            continue
+            
+        img = cv2.imread(img_path)
+        if img is None:
+            continue
+            
+        h, w = img.shape[:2]
+        
+        label_path = os.path.join(labels_dir, l_file)
+        try:
+            with open(label_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception as e:
+            print(f"Lỗi đọc {label_path}: {e}", flush=True)
+            continue
+            
+        for line_idx, line in enumerate(lines):
+            line = line.strip()
+            if not line:
+                continue
+                
+            parts = line.split(",", 8)
+            if len(parts) < 9:
+                continue
+                
+            transcript = parts[8]
+            if transcript == "###" or not transcript.strip():
+                continue
+                
+            try:
+                coords = [float(p) for p in parts[:8]]
+            except ValueError:
+                continue
+                
+            x_coords = [coords[0], coords[2], coords[4], coords[6]]
+            y_coords = [coords[1], coords[3], coords[5], coords[7]]
+            
+            min_x = max(0, int(min(x_coords)))
+            min_y = max(0, int(min(y_coords)))
+            max_x = min(w, int(max(x_coords)))
+            max_y = min(h, int(max(y_coords)))
+            
+            if (max_x - min_x) <= 2 or (max_y - min_y) <= 2:
+                continue
+                
+            crop_img = img[min_y:max_y, min_x:max_x]
+            crop_name = f"crop_{N:04d}_{line_idx:03d}.jpg"
+            crop_path = os.path.join(local_crops_dir, crop_name)
+            
+            cv2.imwrite(crop_path, crop_img)
+            
+            record = f"crops/{crop_name}\t{transcript}\n"
+            if is_train:
+                train_lines.append(record)
+            else:
+                val_lines.append(record)
+                
+            crop_idx += 1
+            if crop_idx % 10000 == 0:
+                print(f"Đã cắt được {crop_idx} từ...", flush=True)
+                
+    print(f"Xử lý xong! Đã tạo {crop_idx} ảnh cắt cục bộ tại {local_crops_dir}.", flush=True)
+    
+    # 6. Đóng gói thư mục tạm thành tệp ZIP
+    local_zip_path = "/tmp/crops.zip"
+    print("Đang nén thư mục ảnh cắt...", flush=True)
+    try:
+        shutil.make_archive("/tmp/crops", 'zip', local_crops_dir)
+        print("Đã nén xong crops.zip.", flush=True)
+    except Exception as e:
+        print(f"Lỗi nén file: {e}", flush=True)
+        return
+        
+    # 7. Sao chép ZIP sang Volume và giải nén (Cực nhanh vì chuyển khối lớn)
+    vol_crops_dir = "/vol/train_data/crops"
+    print("Đang dọn dẹp thư mục ảnh cũ trên Volume...", flush=True)
+    shutil.rmtree(vol_crops_dir, ignore_errors=True)
+    os.makedirs(vol_crops_dir, exist_ok=True)
+    
+    print("Đang giải nén tệp zip trực tiếp lên Volume...", flush=True)
+    try:
+        with zipfile.ZipFile(local_zip_path, 'r') as zip_ref:
+            zip_ref.extractall(vol_crops_dir)
+        print("Giải nén lên Volume hoàn tất.", flush=True)
+    except Exception as e:
+        print(f"Lỗi giải nén lên Volume: {e}", flush=True)
+        return
+    finally:
+        # Dọn dẹp /tmp
+        shutil.rmtree(local_crops_dir, ignore_errors=True)
+        if os.path.exists(local_zip_path):
+            os.remove(local_zip_path)
+            
+    # Ghi file txt nhãn
+    with open(train_list_path, "w", encoding="utf-8") as f:
+        f.writelines(train_lines)
+    with open(val_list_path, "w", encoding="utf-8") as f:
+        f.writelines(val_lines)
+        
+    print(f"Hoàn tất chuẩn bị dữ liệu!")
+    print(f"Tổng số ảnh cropped cho Train: {len(train_lines)}", flush=True)
+    print(f"Tổng số ảnh cropped cho Val: {len(val_lines)}", flush=True)
+    print(f"Đã ghi nhãn vào {train_list_path} và {val_list_path}", flush=True)
