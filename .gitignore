@@ -1,40 +1,29 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-.ipynb_checkpoints/
-*.py[cod]
-*$py.class
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
 
-# C extensions
-*.so
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
 
-/inference/
-/inference_results/
-/output/
-/train_data/
-/log/
+# Editor and IDE configurations
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
 
-*.DS_Store
-*.vs
-*.user
-*~
-*.vscode
-*.idea
-
+# Local log files
 *.log
-.clang-format
-.clang_format.hook
 
-build/
-dist/
-*.egg-info/
-
-/deploy/android_demo/app/OpenCV/
-/deploy/android_demo/app/PaddleLite/
-/deploy/android_demo/app/.cxx/
-/deploy/android_demo/app/cache/
-
-test_tipc/web/models/
-test_tipc/web/node_modules/
-
+# Python virtual environment (if any)
 .venv/
-.worktrees/
+venv/
+ENV/
+
+# Temporary files
+temp_test.png
