@@ -1,38 +1,35 @@
-# Windows system files
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# macOS system files
-.DS_Store
-.AppleDouble
-.LSOverride
-
-# Editor and IDE configurations
-.vscode/
-.idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.swp
-
-# Python/C++ build & packaging ignore
+# Python
 __pycache__/
-.ipynb_checkpoints/
 *.py[cod]
-*$py.class
-*.so
-build/
-dist/
 *.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
 
-# Local large data directories (highly recommended for Modal volume sync)
-/train_data/
-/vintext_extracted/
-/pretrain_models/
-/output/
+# Modal
+.modal/
 
-# Local logs and temporary files
-*.log
-temp_test.png
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data & Models
+*.pdparams
+*.pdopt
+*.inference
+*.jpg
+*.png
+*.bmp
+*.pdf
+
+# Graphify
+graphify-out/
