@@ -20,10 +20,11 @@ ocr_image = (
     .pip_install("gdown") # Sử dụng để tải tệp lớn từ Google Drive một cách tin cậy
     .pip_install("pymupdf") # Thư viện xử lý PDF trực tiếp trên backend
     .pip_install_from_requirements("requirements.txt")
-    .pip_install("paddleocr==2.7.3.1") # v2.7.x không phụ thuộc paddlex — ổn định với Paddle 2.6
+    .pip_install("paddleocr==2.7.3") # v2.7.3 không phụ thuộc paddlex — ổn định với Paddle 2.6
     .add_local_dir(
         ".",
         remote_path="/root",
+        copy=True,
         ignore=[
             ".git", 
             "train_data", 
@@ -33,6 +34,7 @@ ocr_image = (
             ".idea", 
             ".gemini", 
             "artifacts", 
+            "paddleocr",
             "**/*.pyc"
         ]
     )
