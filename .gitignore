@@ -1,40 +1,38 @@
-# Byte-compiled / optimized / DLL files
+# Windows system files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor and IDE configurations
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Python/C++ build & packaging ignore
 __pycache__/
 .ipynb_checkpoints/
 *.py[cod]
 *$py.class
-
-# C extensions
 *.so
-
-/inference/
-/inference_results/
-/output/
-/train_data/
-/log/
-
-*.DS_Store
-*.vs
-*.user
-*~
-*.vscode
-*.idea
-
-*.log
-.clang-format
-.clang_format.hook
-
 build/
 dist/
 *.egg-info/
 
-/deploy/android_demo/app/OpenCV/
-/deploy/android_demo/app/PaddleLite/
-/deploy/android_demo/app/.cxx/
-/deploy/android_demo/app/cache/
+# Local large data directories (highly recommended for Modal volume sync)
+/train_data/
+/vintext_extracted/
+/pretrain_models/
+/output/
 
-test_tipc/web/models/
-test_tipc/web/node_modules/
-
-.venv/
-.worktrees/
+# Local logs and temporary files
+*.log
+temp_test.png

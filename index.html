@@ -11,6 +11,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- PDF.js library for Client-side PDF processing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
     <!-- Custom Stylesheet -->
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -37,22 +39,50 @@
         <main class="main-workspace">
             <!-- Left Side: Upload and Image Preview -->
             <section class="workspace-card upload-section">
-                <h1 class="section-title"><i class="fa-solid fa-image-portrait"></i> Tải ảnh tài liệu</h1>
-                <p class="section-subtitle">Hỗ trợ các định dạng PNG, JPG, JPEG. Xử lý thời gian thực qua serverless GPU.</p>
+                <h1 class="section-title"><i class="fa-solid fa-file-invoice"></i> Tải tài liệu & Hình ảnh</h1>
+                <p class="section-subtitle">Hỗ trợ ảnh (PNG, JPG, JPEG) và tài liệu PDF. Xử lý thời gian thực qua serverless GPU.</p>
                 
                 <div class="dropzone" id="upload-dropzone">
-                    <input type="file" id="file-input" accept="image/*" class="file-input-hidden">
+                    <input type="file" id="file-input" accept="image/*,application/pdf" class="file-input-hidden">
                     <div class="dropzone-content" id="dropzone-default">
                         <i class="fa-solid fa-cloud-arrow-up upload-icon"></i>
-                        <p class="upload-text">Kéo và thả ảnh vào đây hoặc <span>chọn từ máy tính</span></p>
+                        <p class="upload-text">Kéo và thả ảnh/file PDF vào đây hoặc <span>chọn từ máy tính</span></p>
                         <p class="upload-limit">Kích thước tối đa: 10MB</p>
                     </div>
                     <div class="dropzone-preview hidden" id="dropzone-preview">
                         <img id="image-element" src="#" alt="Preview">
-                        <button type="button" class="btn-remove" id="btn-remove-image" title="Xóa ảnh">
+                        <canvas id="pdf-preview-canvas" class="hidden"></canvas>
+                        <button type="button" class="btn-remove" id="btn-remove-image" title="Xóa tài liệu">
                             <i class="fa-solid fa-xmark"></i>
                         </button>
                     </div>
+                </div>
+
+                <!-- PDF Options Selector (Hidden by default) -->
+                <div class="pdf-options-container hidden" id="pdf-options-container">
+                    <div class="pdf-options-title">
+                        <i class="fa-solid fa-file-pdf"></i>
+                        <span>Tùy chọn quét tài liệu PDF</span>
+                    </div>
+                    <div class="pdf-scan-mode-row">
+                        <label for="pdf-scan-mode" class="pdf-mode-label">Chế độ quét:</label>
+                        <select id="pdf-scan-mode" class="pdf-mode-select">
+                            <option value="current" selected>Chỉ quét trang hiện tại</option>
+                            <option value="all">Quét toàn bộ tài liệu</option>
+                        </select>
+                    </div>
+                    <div class="pdf-page-controls" id="pdf-page-controls-container">
+                        <button type="button" class="btn-page-nav" id="btn-prev-page" title="Trang trước" disabled>
+                            <i class="fa-solid fa-chevron-left"></i>
+                        </button>
+                        <div class="pdf-page-indicator">
+                            Trang <input type="number" id="pdf-page-input" value="1" min="1" max="1"> / <span id="pdf-total-pages">1</span>
+                        </div>
+                        <button type="button" class="btn-page-nav" id="btn-next-page" title="Trang sau" disabled>
+                            <i class="fa-solid fa-chevron-right"></i>
+                        </button>
+                    </div>
+                    <p class="pdf-help-text" id="pdf-page-help-text">Di chuyển qua lại hoặc nhập số trang để chọn trang muốn nhận dạng chữ.</p>
                 </div>
 
                 <div class="action-bar">
