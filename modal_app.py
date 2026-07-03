@@ -13,14 +13,12 @@ ocr_image = (
     .env({
         "LD_LIBRARY_PATH": "/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
     })
-    .pip_install(
-        "numpy==1.26.4", # Bắt buộc cài đặt NumPy 1.x để tương thích với Paddle 2.6
-        "paddlepaddle-gpu==2.6.0", # Cài đặt Paddle tương thích với T4/CUDA 11.8
-        "imaug",
-        "fastapi[standard]", # Bắt buộc cho các hàm fastapi_endpoint trong các bản Modal mới
-        "gdown", # Sử dụng để tải tệp lớn từ Google Drive một cách tin cậy
-        "pymupdf" # Thư viện xử lý PDF trực tiếp trên backend
-    )
+    .pip_install("numpy==1.26.4") # Bắt buộc cài đặt NumPy 1.x để tương thích với Paddle 2.6
+    .pip_install("paddlepaddle-gpu==2.6.0") # Cài đặt Paddle tương thích với T4/CUDA 11.8
+    .pip_install("imaug")
+    .pip_install("fastapi[standard]") # Bắt buộc cho các hàm fastapi_endpoint trong các bản Modal mới
+    .pip_install("gdown") # Sử dụng để tải tệp lớn từ Google Drive một cách tin cậy
+    .pip_install("pymupdf") # Thư viện xử lý PDF trực tiếp trên backend
     .pip_install_from_requirements("requirements.txt")
     .pip_install("paddleocr>=2.8.0")
     .add_local_dir(
@@ -359,11 +357,10 @@ def fastapi_app():
 
     @web_app.get("/")
     async def health_endpoint():
-        ocr = get_ocr_model()
         return {
             "status": "running",
             "model_type": model_type_global,
-            "model_loaded": ocr is not None
+            "model_loaded": ocr_model is not None
         }
 
     return web_app

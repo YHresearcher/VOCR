@@ -1,5 +1,5 @@
 // App Configuration and State
-const API_BASE_URL = 'https://yhresearcher--vietocr-service-fastapi-app.modal.run';
+const API_BASE_URL = 'https://yhresearcher--vietocr-service-fastapi-app-fastapi-app.modal.run';
 let currentFile = null;
 let ocrResult = null;
 
