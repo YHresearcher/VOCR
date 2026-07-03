@@ -18,7 +18,7 @@ const elements = {
     imageElement: document.getElementById('image-element'),
     btnRemoveImage: document.getElementById('btn-remove-image'),
     btnProcess: document.getElementById('btn-process'),
-    
+
     // PDF elements
     pdfOptionsContainer: document.getElementById('pdf-options-container'),
     btnPrevPage: document.getElementById('btn-prev-page'),
@@ -27,11 +27,11 @@ const elements = {
     pdfTotalPages: document.getElementById('pdf-total-pages'),
     pdfPreviewCanvas: document.getElementById('pdf-preview-canvas'),
     pdfScanMode: document.getElementById('pdf-scan-mode'),
-    
+
     // Tab Elements
     tabButtons: document.querySelectorAll('.tab-btn'),
     tabContents: document.querySelectorAll('.tab-content'),
-    
+
     // Output Elements
     loadingOverlay: document.getElementById('loading-overlay'),
     resultEmpty: document.getElementById('result-empty'),
@@ -39,16 +39,16 @@ const elements = {
     textOutput: document.getElementById('text-output'),
     linesList: document.getElementById('lines-list'),
     jsonOutput: document.getElementById('json-output'),
-    
+
     // Actions
     btnCopyText: document.getElementById('btn-copy-text'),
     btnDownloadTxt: document.getElementById('btn-download-txt'),
     btnDownloadJson: document.getElementById('btn-download-json'),
-    
+
     // Stats
     statLinesCount: document.getElementById('stat-lines-count'),
     statTime: document.getElementById('stat-time'),
-    
+
     // API Badge
     apiStatusBadge: document.getElementById('api-status-badge'),
     toastContainer: document.getElementById('toast-container')
@@ -158,15 +158,15 @@ function handleFileSelect(e) {
 function validateAndSetFile(file) {
     const isPDF = file.type === 'application/pdf' || file.name.endsWith('.pdf');
     const isImage = file.type.startsWith('image/');
-    
+
     if (!isPDF && !isImage) {
         showToast('Vui lòng chọn file hình ảnh (PNG, JPG, JPEG) hoặc tài liệu PDF.', 'error');
         return;
     }
-    
-    const maxSize = 10 * 1024 * 1024; // 10MB
+
+    const maxSize = 50 * 1024 * 1024; // 50MB
     if (file.size > maxSize) {
-        showToast('Kích thước tệp vượt quá giới hạn 10MB.', 'error');
+        showToast('Kích thước tệp vượt quá giới hạn 50MB.', 'error');
         return;
     }
 
@@ -195,17 +195,17 @@ function validateAndSetFile(file) {
             const typedarray = new Uint8Array(this.result);
             // Configure PDF.js worker
             pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
-            
+
             pdfjsLib.getDocument({ data: typedarray }).promise.then(pdf => {
                 pdfDoc = pdf;
                 elements.pdfTotalPages.textContent = pdf.numPages;
                 elements.pdfPageInput.max = pdf.numPages;
                 pdfPageNum = 1;
                 elements.pdfPageInput.value = 1;
-                
+
                 elements.pdfOptionsContainer.classList.remove('hidden');
                 elements.btnProcess.removeAttribute('disabled');
-                
+
                 renderPage(pdfPageNum);
                 showToast(`Đã tải tài liệu PDF: ${file.name} (${pdf.numPages} trang)`, 'success');
             }).catch(error => {
@@ -239,7 +239,7 @@ function resetUpload() {
     currentFile = null;
     elements.fileInput.value = '';
     elements.imageElement.src = '#';
-    
+
     // Reset PDF States
     pdfDoc = null;
     pdfPageNum = 1;
@@ -251,11 +251,11 @@ function resetUpload() {
     elements.pdfOptionsContainer.classList.add('hidden');
     elements.pdfPreviewCanvas.classList.add('hidden');
     elements.imageElement.classList.remove('hidden');
-    
+
     elements.dropzoneDefault.classList.remove('hidden');
     elements.dropzonePreview.classList.add('hidden');
     elements.btnProcess.setAttribute('disabled', 'true');
-    
+
     // Clear OCR results state
     ocrResult = null;
     elements.resultEmpty.classList.remove('hidden');
@@ -322,7 +322,7 @@ async function processOcr() {
 
         const data = await response.json();
         const duration = ((performance.now() - startTime) / 1000).toFixed(2);
-        
+
         ocrResult = data;
         displayOcrResult(data, duration);
         showToast('Nhận dạng chữ thành công!', 'success');
@@ -339,11 +339,11 @@ async function processOcr() {
 function renderPage(num) {
     if (!pdfDoc) return;
     pdfPageRendering = true;
-    
+
     pdfDoc.getPage(num).then(page => {
         const canvas = elements.pdfPreviewCanvas;
         const context = canvas.getContext('2d');
-        
+
         // Render a reasonable sized preview thumbnail (scale = 0.8)
         const viewport = page.getViewport({ scale: 0.8 });
         canvas.height = viewport.height;
@@ -361,11 +361,11 @@ function renderPage(num) {
 
         renderTask.promise.then(() => {
             pdfPageRendering = false;
-            
+
             // Enable/disable page buttons
             elements.btnPrevPage.disabled = (num <= 1);
             elements.btnNextPage.disabled = (num >= pdfDoc.numPages);
-            
+
             if (pdfPendingPageNum !== null) {
                 renderPage(pdfPendingPageNum);
                 pdfPendingPageNum = null;
@@ -411,7 +411,7 @@ function onPageInputChange(e) {
 function displayOcrResult(data, durationSec) {
     // 1. Text Area Tab
     elements.textOutput.value = data.full_text || data.text || '';
-    
+
     // 2. Lines View Tab
     elements.linesList.innerHTML = '';
     const lines = data.lines || [];
@@ -419,15 +419,15 @@ function displayOcrResult(data, durationSec) {
         lines.forEach((lineText, index) => {
             const item = document.createElement('div');
             item.className = 'line-item';
-            
+
             const num = document.createElement('span');
             num.className = 'line-number';
             num.innerText = index + 1;
-            
+
             const textEl = document.createElement('span');
             textEl.className = 'line-text';
             textEl.innerText = lineText;
-            
+
             item.appendChild(num);
             item.appendChild(textEl);
             elements.linesList.appendChild(item);
@@ -487,22 +487,22 @@ function downloadJsonFile() {
 function showToast(message, type = 'success') {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    
+
     const icon = document.createElement('i');
     if (type === 'success') {
         icon.className = 'fa-solid fa-circle-check toast-icon success';
     } else {
         icon.className = 'fa-solid fa-circle-xmark toast-icon error';
     }
-    
+
     const text = document.createElement('span');
     text.className = 'toast-message';
     text.innerText = message;
-    
+
     toast.appendChild(icon);
     toast.appendChild(text);
     elements.toastContainer.appendChild(toast);
-    
+
     // Automatically remove toast after 3.5 seconds
     setTimeout(() => {
         toast.style.animation = 'slide-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) reverse forwards';
@@ -513,12 +513,12 @@ function showToast(message, type = 'success') {
 // PDF Scan Mode Change Listener
 function handleScanModeChange(e) {
     const isAll = e.target.value === 'all';
-    
+
     // Disable/enable page navigation based on mode
     elements.btnPrevPage.disabled = isAll || (pdfPageNum <= 1);
     elements.btnNextPage.disabled = isAll || (pdfPageNum >= (pdfDoc ? pdfDoc.numPages : 1));
     elements.pdfPageInput.disabled = isAll;
-    
+
     const helpText = document.getElementById('pdf-page-help-text');
     if (isAll) {
         helpText.textContent = "Toàn bộ các trang trong tài liệu PDF sẽ được nhận dạng chữ.";

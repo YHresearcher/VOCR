@@ -1,14 +1,17 @@
 <!DOCTYPE html>
 <html lang="vi">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="VietOCR Portal - Công cụ trực tuyến sử dụng trí tuệ nhân tạo để nhận dạng chữ viết Tiếng Việt nhanh chóng và chính xác.">
+    <meta name="description"
+        content="VietOCR Portal - Công cụ trực tuyến sử dụng trí tuệ nhân tạo để nhận dạng chữ viết Tiếng Việt nhanh chóng và chính xác.">
     <title>VietOCR Portal - Nhận Dạng Chữ Tiếng Việt</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
     <!-- FontAwesome for Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- PDF.js library for Client-side PDF processing -->
@@ -16,6 +19,7 @@
     <!-- Custom Stylesheet -->
     <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
     <div class="background-decor">
         <div class="blob blob-1"></div>
@@ -40,14 +44,15 @@
             <!-- Left Side: Upload and Image Preview -->
             <section class="workspace-card upload-section">
                 <h1 class="section-title"><i class="fa-solid fa-file-invoice"></i> Tải tài liệu & Hình ảnh</h1>
-                <p class="section-subtitle">Hỗ trợ ảnh (PNG, JPG, JPEG) và tài liệu PDF. Xử lý thời gian thực qua serverless GPU.</p>
-                
+                <p class="section-subtitle">Hỗ trợ ảnh (PNG, JPG, JPEG) và tài liệu PDF. Xử lý thời gian thực qua
+                    serverless GPU.</p>
+
                 <div class="dropzone" id="upload-dropzone">
                     <input type="file" id="file-input" accept="image/*,application/pdf" class="file-input-hidden">
                     <div class="dropzone-content" id="dropzone-default">
                         <i class="fa-solid fa-cloud-arrow-up upload-icon"></i>
                         <p class="upload-text">Kéo và thả ảnh/file PDF vào đây hoặc <span>chọn từ máy tính</span></p>
-                        <p class="upload-limit">Kích thước tối đa: 10MB</p>
+                        <p class="upload-limit">Kích thước tối đa: 50MB</p>
                     </div>
                     <div class="dropzone-preview hidden" id="dropzone-preview">
                         <img id="image-element" src="#" alt="Preview">
@@ -76,13 +81,15 @@
                             <i class="fa-solid fa-chevron-left"></i>
                         </button>
                         <div class="pdf-page-indicator">
-                            Trang <input type="number" id="pdf-page-input" value="1" min="1" max="1"> / <span id="pdf-total-pages">1</span>
+                            Trang <input type="number" id="pdf-page-input" value="1" min="1" max="1"> / <span
+                                id="pdf-total-pages">1</span>
                         </div>
                         <button type="button" class="btn-page-nav" id="btn-next-page" title="Trang sau" disabled>
                             <i class="fa-solid fa-chevron-right"></i>
                         </button>
                     </div>
-                    <p class="pdf-help-text" id="pdf-page-help-text">Di chuyển qua lại hoặc nhập số trang để chọn trang muốn nhận dạng chữ.</p>
+                    <p class="pdf-help-text" id="pdf-page-help-text">Di chuyển qua lại hoặc nhập số trang để chọn trang
+                        muốn nhận dạng chữ.</p>
                 </div>
 
                 <div class="action-bar">
@@ -97,8 +104,10 @@
                 <div class="result-header">
                     <h2 class="section-title"><i class="fa-solid fa-square-poll-horizontal"></i> Kết quả nhận dạng</h2>
                     <div class="tabs" id="result-tabs">
-                        <button type="button" class="tab-btn active" data-tab="plain-text" id="tab-btn-plain">Văn bản</button>
-                        <button type="button" class="tab-btn" data-tab="lines-view" id="tab-btn-lines">Từng dòng</button>
+                        <button type="button" class="tab-btn active" data-tab="plain-text" id="tab-btn-plain">Văn
+                            bản</button>
+                        <button type="button" class="tab-btn" data-tab="lines-view" id="tab-btn-lines">Từng
+                            dòng</button>
                         <button type="button" class="tab-btn" data-tab="json-view" id="tab-btn-json">JSON</button>
                     </div>
                 </div>
@@ -115,13 +124,15 @@
                     <div class="empty-state" id="result-empty">
                         <i class="fa-solid fa-magnifying-glass-chart empty-icon"></i>
                         <p class="empty-title">Chưa có dữ liệu nhận dạng</p>
-                        <p class="empty-subtitle">Hãy tải ảnh tài liệu lên ở khung bên trái và nhấn "Nhận dạng chữ" để bắt đầu.</p>
+                        <p class="empty-subtitle">Hãy tải ảnh tài liệu lên ở khung bên trái và nhấn "Nhận dạng chữ" để
+                            bắt đầu.</p>
                     </div>
 
                     <!-- Tab Contents -->
                     <div class="tab-content active" id="tab-plain-text">
                         <div class="text-editor-container">
-                            <textarea id="text-output" readonly placeholder="Kết quả văn bản sẽ hiển thị ở đây..."></textarea>
+                            <textarea id="text-output" readonly
+                                placeholder="Kết quả văn bản sẽ hiển thị ở đây..."></textarea>
                             <button type="button" class="btn-copy" id="btn-copy-text" title="Sao chép văn bản">
                                 <i class="fa-regular fa-copy"></i> Sao chép
                             </button>
@@ -165,7 +176,8 @@
 
         <!-- Page Footer -->
         <footer class="app-footer">
-            <p>&copy; 2026 VietOCR Portal. Công nghệ lõi: EasyOCR (Phát hiện) & VietOCR (Nhận dạng) chạy trên Modal GPU Cloud.</p>
+            <p>&copy; 2026 VietOCR Portal. Công nghệ lõi: EasyOCR (Phát hiện) & VietOCR (Nhận dạng) chạy trên Modal GPU
+                Cloud.</p>
         </footer>
     </div>
 
@@ -175,4 +187,5 @@
     <!-- Custom Script -->
     <script src="app.js"></script>
 </body>
+
 </html>

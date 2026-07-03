@@ -7,7 +7,7 @@
 ## 🚀 Tính Năng Nổi Bật
 
 - **Nhận dạng Tiếng Việt chuyên sâu**: Nhận dạng cực tốt các chữ in, chữ viết tay, ký tự đặc biệt có dấu tiếng Việt với độ chính xác cao.
-- **Trải nghiệm kéo thả mượt mà (Drag-and-Drop)**: Tải ảnh tài liệu (PNG, JPG, JPEG) và file PDF với dung lượng hỗ trợ lên tới **10MB**.
+- **Trải nghiệm kéo thả mượt mà (Drag-and-Drop)**: Tải ảnh tài liệu (PNG, JPG, JPEG) và file PDF với dung lượng hỗ trợ lên tới **50MB**.
 - **Thời gian thực (Real-time Processing)**: Nhờ tích hợp hạ tầng điện toán đám mây **Modal Serverless GPU**, quá trình nhận diện diễn ra trong vài giây.
 - **Hiển thị kết quả đa chiều**: Xem kết quả dưới 3 dạng trực quan:
   - **Văn bản**: Đoạn văn bản đầy đủ được định dạng liền mạch.
