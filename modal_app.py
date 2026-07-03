@@ -38,6 +38,15 @@ ocr_image = (
             "**/*.pyc"
         ]
     )
+    # Tải mã nguồn PaddleOCR 2.7 (tools/, configs/, ppocr/) cho training/export
+    # vì framework đã bị xóa khỏi repo local để giữ repo sạch
+    .run_commands(
+        "git clone --depth 1 --branch release/2.7 https://github.com/PaddlePaddle/PaddleOCR.git /tmp/poco-src "
+        "&& cp -r /tmp/poco-src/tools /root/tools "
+        "&& cp -r /tmp/poco-src/configs /root/configs "
+        "&& cp -r /tmp/poco-src/ppocr /root/ppocr "
+        "&& rm -rf /tmp/poco-src"
+    )
 )
 
 # Khởi tạo Volume để lưu trữ dữ liệu huấn luyện và trọng số (Checkpoints)
