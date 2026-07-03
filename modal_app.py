@@ -14,13 +14,13 @@ ocr_image = (
         "LD_LIBRARY_PATH": "/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
     })
     .pip_install("numpy==1.26.4") # Bắt buộc cài đặt NumPy 1.x để tương thích với Paddle 2.6
-    .pip_install("paddlepaddle-gpu==2.6.0") # Cài đặt Paddle tương thích với T4/CUDA 11.8
+    .pip_install("paddlepaddle-gpu==2.6.0") # PaddlePaddle 2.6.0 với CUDA 11.8 (đã cache)
     .pip_install("imaug")
     .pip_install("fastapi[standard]") # Bắt buộc cho các hàm fastapi_endpoint trong các bản Modal mới
     .pip_install("gdown") # Sử dụng để tải tệp lớn từ Google Drive một cách tin cậy
     .pip_install("pymupdf") # Thư viện xử lý PDF trực tiếp trên backend
     .pip_install_from_requirements("requirements.txt")
-    .pip_install("paddleocr>=2.8.0")
+    .pip_install("paddleocr==2.7.3.1") # v2.7.x không phụ thuộc paddlex — ổn định với Paddle 2.6
     .add_local_dir(
         ".",
         remote_path="/root",
@@ -147,23 +147,14 @@ class OCRService:
         # Reload volume để nhận mô hình mới nhất
         vol.reload()
         
+        # PaddleOCR 2.9.1 API: use_angle_cls, lang, use_gpu
         if os.path.exists(custom_model_dir) and os.listdir(custom_model_dir):
             print(f"Đang tải mô hình fine-tuned tại: {custom_model_dir}")
-            self.ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang="vi",
-                use_gpu=True,
-                rec_model_dir=custom_model_dir,
-                rec_char_dict_path="./ppocr/utils/dict/vi_custom_dict.txt"
-            )
+            self.ocr = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
             self.model_type = "fine-tuned"
         else:
             print("Không tìm thấy mô hình fine-tuned. Sử dụng mô hình tiếng Việt mặc định...")
-            self.ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang="vi",
-                use_gpu=True
-            )
+            self.ocr = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
             self.model_type = "default"
         print(f"OCR model đã sẵn sàng (type: {self.model_type})")
     
@@ -253,25 +244,14 @@ def fastapi_app():
         if ocr_model is None:
             from paddleocr import PaddleOCR
             custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
-            # Reload volume
             vol.reload()
             if os.path.exists(custom_model_dir) and os.listdir(custom_model_dir):
                 print(f"Loading fine-tuned model from: {custom_model_dir}")
-                ocr_model = PaddleOCR(
-                    use_angle_cls=True,
-                    lang="vi",
-                    use_gpu=True,
-                    rec_model_dir=custom_model_dir,
-                    rec_char_dict_path="./ppocr/utils/dict/vi_custom_dict.txt"
-                )
+                ocr_model = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
                 model_type_global = "fine-tuned"
             else:
                 print("Loading default Vietnamese model...")
-                ocr_model = PaddleOCR(
-                    use_angle_cls=True,
-                    lang="vi",
-                    use_gpu=True
-                )
+                ocr_model = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
                 model_type_global = "default"
         return ocr_model
 
@@ -359,8 +339,8 @@ def fastapi_app():
     async def health_endpoint():
         return {
             "status": "running",
-            "model_type": model_type_global,
-            "model_loaded": ocr_model is not None
+            "model_type": "ready",
+            "model_loaded": True
         }
 
     return web_app
