@@ -14,13 +14,13 @@ ocr_image = (
         "LD_LIBRARY_PATH": "/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
     })
     .pip_install("numpy==1.26.4") # NumPy 1.x cho tương thích tốt
-    .pip_install("paddlepaddle-gpu==3.0.0") # PaddlePaddle 3.0 cho PP-OCRv5
-    .pip_install("imaug")
+    .run_commands("pip install paddlepaddle-gpu==2.6.2 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/")
+    .pip_install("imgaug")
     .pip_install("fastapi[standard]") # Bắt buộc cho các hàm fastapi_endpoint trong các bản Modal mới
     .pip_install("gdown") # Sử dụng để tải tệp lớn từ Google Drive một cách tin cậy
     .pip_install("pymupdf") # Thư viện xử lý PDF trực tiếp trên backend
-    .pip_install_from_requirements("requirements.txt")
-    # paddleocr installed from source (release/3.0) in .run_commands below
+    .pip_install_from_requirements("requirements.txt")  # installs paddleocr==2.9.1
+    # paddleocr 2.9.1 compatible with paddlepaddle-gpu 2.6.2
     .pip_install("transformers", "torch", "sentencepiece") # HuggingFace correction model
     .add_local_dir(
         ".",
@@ -43,7 +43,6 @@ ocr_image = (
     # vì framework đã bị xóa khỏi repo local để giữ repo sạch
     .run_commands(
         "git clone --depth 1 --branch release/3.0 https://github.com/PaddlePaddle/PaddleOCR.git /tmp/poco-src "
-        "&& pip install /tmp/poco-src "
         "&& cp -r /tmp/poco-src/tools /root/tools "
         "&& cp -r /tmp/poco-src/configs /root/configs "
         "&& cp -r /tmp/poco-src/ppocr /root/ppocr "
