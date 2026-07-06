@@ -21,6 +21,7 @@ ocr_image = (
     .pip_install("pymupdf") # Thư viện xử lý PDF trực tiếp trên backend
     .pip_install_from_requirements("requirements.txt")
     .pip_install("paddleocr==2.7.3") # v2.7.3 không phụ thuộc paddlex — ổn định với Paddle 2.6
+    .pip_install("transformers", "torch", "sentencepiece") # HuggingFace correction model
     .add_local_dir(
         ".",
         remote_path="/root",
@@ -136,6 +137,93 @@ def run_export():
     except subprocess.CalledProcessError as e:
         print(f"Lỗi trong quá trình export model: {e}")
 
+# ==========================================
+# Vietnamese Text Correction Layer (Tier 1)
+# Uses HuggingFace model to fix OCR errors in Vietnamese text
+# ==========================================
+
+class VietnameseCorrector:
+    """Post-processing correction for Vietnamese OCR output using HuggingFace transformer model."""
+    
+    def __init__(self):
+        self.model = None
+        self.tokenizer = None
+        self.ready = False
+    
+    def load(self):
+        """Load the Vietnamese correction model from HuggingFace."""
+        try:
+            from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+            import torch
+            
+            model_name = "MinhDucNguyen9705/vietnamese-correction-2.0-ocr"
+            print(f"Đang tải mô hình sửa lỗi tiếng Việt từ {model_name}...")
+            
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            
+            # Move to GPU if available
+            if torch.cuda.is_available():
+                self.model = self.model.cuda()
+                print("Correction model loaded on GPU.")
+            else:
+                print("Correction model loaded on CPU.")
+            
+            self.model.eval()
+            self.ready = True
+            print("Mô hình sửa lỗi tiếng Việt đã sẵn sàng.")
+        except Exception as e:
+            print(f"CẢNH BÁO: Không thể tải mô hình sửa lỗi: {e}")
+            self.ready = False
+    
+    def correct(self, text: str) -> str:
+        """Correct Vietnamese OCR text. Returns original text if model unavailable."""
+        if not self.ready or not text or not text.strip():
+            return text
+        
+        import torch
+        
+        try:
+            # Process text line by line to avoid truncation
+            lines = text.split('\n')
+            corrected_lines = []
+            
+            for line in lines:
+                if not line.strip():
+                    corrected_lines.append(line)
+                    continue
+                
+                inputs = self.tokenizer(
+                    line, 
+                    return_tensors="pt", 
+                    max_length=512, 
+                    truncation=True, 
+                    padding=True
+                )
+                
+                # Move to same device as model
+                if torch.cuda.is_available():
+                    inputs = {k: v.cuda() for k, v in inputs.items()}
+                
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        **inputs,
+                        max_length=512,
+                        num_beams=4,
+                        early_stopping=True
+                    )
+                
+                corrected = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                corrected_lines.append(corrected)
+            
+            return '\n'.join(corrected_lines)
+        except Exception as e:
+            print(f"Lỗi khi sửa text: {e}")
+            return text  # Fallback to original text
+
+# Singleton instance for sharing across functions
+corrector = VietnameseCorrector()
+
 # 3. OCR Service: Class-based để giữ model trong bộ nhớ GPU giữa các request
 @app.cls(
     image=ocr_image,
@@ -147,10 +235,11 @@ class OCRService:
     def __init__(self):
         self.ocr = None
         self.model_type = None
+        self.corrector = VietnameseCorrector()
     
     @modal.enter()
     def load_model(self):
-        """Khởi tạo PaddleOCR một lần duy nhất khi container start, thay vì mỗi request."""
+        """Khởi tạo PaddleOCR + Correction model một lần duy nhất khi container start."""
         from paddleocr import PaddleOCR
         
         custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
@@ -167,7 +256,11 @@ class OCRService:
             print("Không tìm thấy mô hình fine-tuned. Sử dụng mô hình tiếng Việt mặc định...")
             self.ocr = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
             self.model_type = "default"
-        print(f"OCR model đã sẵn sàng (type: {self.model_type})")
+        
+        # Load Vietnamese correction model (Tier 1)
+        self.corrector.load()
+        
+        print(f"OCR model đã sẵn sàng (type: {self.model_type}, correction: {self.corrector.ready})")
     
     @modal.fastapi_endpoint(method="POST")
     def ocr_webhook(self, item: dict):
@@ -195,11 +288,17 @@ class OCRService:
             if result and result[0]:
                 for line in result[0]:
                     extracted_text.append(line[1][0])
+            
+            # Apply Vietnamese correction (Tier 1)
+            raw_text = "\n".join(extracted_text)
+            corrected_text = self.corrector.correct(raw_text) if self.corrector.ready else raw_text
                     
             return {
                 "status": "success",
                 "model_type": self.model_type,
-                "text": "\n".join(extracted_text),
+                "correction_applied": self.corrector.ready,
+                "text": corrected_text,
+                "raw_ocr_text": raw_text,
                 "raw_result": result
             }
         except Exception as e:
@@ -226,6 +325,7 @@ class OCRService:
 # Global variables for model sharing inside the container
 ocr_model = None
 model_type_global = "default"
+fastapi_corrector = None
 
 @app.function(
     image=ocr_image,
@@ -237,11 +337,40 @@ model_type_global = "default"
 def fastapi_app():
     from fastapi import FastAPI, UploadFile, File, Form, HTTPException
     from fastapi.middleware.cors import CORSMiddleware
+    from contextlib import asynccontextmanager
     import numpy as np
     import cv2
     import fitz  # PyMuPDF
     
-    web_app = FastAPI(title="VietOCR Service API")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Load PaddleOCR model + correction model on startup."""
+        global ocr_model, model_type_global, fastapi_corrector
+        from paddleocr import PaddleOCR
+        import os as _os
+        try:
+            vol.reload()
+            custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+            if _os.path.exists(custom_model_dir) and _os.listdir(custom_model_dir):
+                print(f"Đang tải mô hình fine-tuned tại: {custom_model_dir}")
+                ocr_model = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
+                model_type_global = "fine-tuned"
+            else:
+                print("Sử dụng mô hình tiếng Việt mặc định...")
+                ocr_model = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
+                model_type_global = "default"
+            
+            # Load Vietnamese correction model
+            fastapi_corrector = VietnameseCorrector()
+            fastapi_corrector.load()
+            
+            print(f"FastAPI OCR model loaded (type: {model_type_global}, correction: {fastapi_corrector.ready})")
+        except Exception as e:
+            print(f"Lỗi khi load model: {e}")
+            model_type_global = "error"
+        yield
+
+    web_app = FastAPI(title="VietOCR Service API", lifespan=lifespan)
     web_app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -333,13 +462,19 @@ def fastapi_app():
                     for line in result[0]:
                         lines.append(line[1][0])
                         box_count += 1
+            
+            # Apply Vietnamese correction (Tier 1)
+            raw_text = "\n".join(lines)
+            corrected_text = fastapi_corrector.correct(raw_text) if fastapi_corrector and fastapi_corrector.ready else raw_text
                         
             return {
                 "status": "success",
                 "model_type": model_type_global,
-                "text": "\n".join(lines),
-                "full_text": "\n".join(lines),
-                "lines": lines,
+                "correction_applied": fastapi_corrector.ready if fastapi_corrector else False,
+                "text": corrected_text,
+                "raw_ocr_text": raw_text,
+                "full_text": corrected_text,
+                "lines": corrected_text.split("\n"),
                 "box_count": box_count,
                 "raw_result": raw_results
             }
@@ -355,7 +490,6 @@ def fastapi_app():
         }
 
     return web_app
-
 
 # 4. Hàm Kiểm tra Môi trường (Diagnostics)
 @app.function(
