@@ -74,8 +74,13 @@ body {
 }
 
 @keyframes float {
-    0% { transform: translate(0, 0) scale(1); }
-    100% { transform: translate(40px, 60px) scale(1.1); }
+    0% {
+        transform: translate(0, 0) scale(1);
+    }
+
+    100% {
+        transform: translate(40px, 60px) scale(1.1);
+    }
 }
 
 /* App Container Layout */
@@ -163,8 +168,13 @@ body {
 }
 
 @keyframes blink {
-    0% { opacity: 0.4; }
-    100% { opacity: 1; }
+    0% {
+        opacity: 0.4;
+    }
+
+    100% {
+        opacity: 1;
+    }
 }
 
 /* Main Workspace Grid */
@@ -234,7 +244,8 @@ body {
     overflow: hidden;
 }
 
-.dropzone:hover, .dropzone.dragover {
+.dropzone:hover,
+.dropzone.dragover {
     border-color: var(--primary-light);
     background: rgba(99, 102, 241, 0.03);
     box-shadow: var(--gradient-glow);
@@ -581,6 +592,34 @@ textarea#text-output:focus {
     color: var(--text-primary);
     line-height: 1.4;
     word-break: break-all;
+    flex: 1;
+}
+
+.line-confidence {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.15rem 0.5rem;
+    border-radius: 9999px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.line-confidence.conf-high {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.line-confidence.conf-medium {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.line-confidence.conf-low {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
 /* JSON raw */
@@ -626,8 +665,13 @@ textarea#text-output:focus {
 }
 
 @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+    0% {
+        transform: rotate(0deg);
+    }
+
+    100% {
+        transform: rotate(360deg);
+    }
 }
 
 .loading-title {
@@ -736,6 +780,7 @@ textarea#text-output:focus {
         opacity: 0;
         transform: translateY(20px) scale(0.95);
     }
+
     to {
         opacity: 1;
         transform: translateY(0) scale(1);
@@ -764,8 +809,13 @@ textarea#text-output:focus {
 
 /* Animations */
 @keyframes pulse-glow {
-    0% { filter: drop-shadow(0 0 2px rgba(99, 102, 241, 0.2)); }
-    100% { filter: drop-shadow(0 0 8px rgba(168, 85, 247, 0.6)); }
+    0% {
+        filter: drop-shadow(0 0 2px rgba(99, 102, 241, 0.2));
+    }
+
+    100% {
+        filter: drop-shadow(0 0 8px rgba(168, 85, 247, 0.6));
+    }
 }
 
 /* PDF Options Container Styling */
@@ -862,7 +912,8 @@ textarea#text-output:focus {
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
     z-index: 2;
-    background: white; /* Đảm bảo trang PDF đọc được */
+    background: white;
+    /* Đảm bảo trang PDF đọc được */
 }
 
 /* PDF Scan Mode Row & Select */
@@ -903,4 +954,3 @@ textarea#text-output:focus {
     background: var(--bg-dark);
     color: var(--text-primary);
 }
-

@@ -416,7 +416,11 @@ function displayOcrResult(data, durationSec) {
     elements.linesList.innerHTML = '';
     const lines = data.lines || [];
     if (lines.length > 0) {
-        lines.forEach((lineText, index) => {
+        lines.forEach((line, index) => {
+            // Support both old format (string) and new format ({text, confidence})
+            const lineText = typeof line === 'string' ? line : line.text;
+            const confidence = typeof line === 'object' ? line.confidence : null;
+
             const item = document.createElement('div');
             item.className = 'line-item';
 
@@ -427,6 +431,19 @@ function displayOcrResult(data, durationSec) {
             const textEl = document.createElement('span');
             textEl.className = 'line-text';
             textEl.innerText = lineText;
+
+            // Show confidence badge if available
+            if (confidence !== null) {
+                const confBadge = document.createElement('span');
+                const confPercent = Math.round(confidence * 100);
+                let confClass = 'conf-high';
+                if (confPercent < 70) confClass = 'conf-low';
+                else if (confPercent < 85) confClass = 'conf-medium';
+                confBadge.className = `line-confidence ${confClass}`;
+                confBadge.innerText = `${confPercent}%`;
+                confBadge.title = `Độ chính xác: ${confPercent}%`;
+                item.appendChild(confBadge);
+            }
 
             item.appendChild(num);
             item.appendChild(textEl);

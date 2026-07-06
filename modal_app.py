@@ -243,25 +243,71 @@ class OCRService:
         """Khởi tạo PaddleOCR + Correction model một lần duy nhất khi container start."""
         from paddleocr import PaddleOCR
         
-        custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+        custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+        custom_det_dir = "/vol/inference/vi_PP-OCRv5_server_det"
         
         # Reload volume để nhận mô hình mới nhất
         vol.reload()
         
-        # PaddleOCR 2.9.1 API: use_angle_cls, lang, use_gpu
-        if os.path.exists(custom_model_dir) and os.listdir(custom_model_dir):
-            print(f"Đang tải mô hình fine-tuned tại: {custom_model_dir}")
-            self.ocr = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
+        # PaddleOCR 2.9.1 API: truyền rec_model_dir để load fine-tuned model
+        ocr_kwargs = dict(use_angle_cls=True, lang="vi", use_gpu=True, show_log=False)
+        
+        if os.path.exists(custom_rec_dir) and os.listdir(custom_rec_dir):
+            print(f"Đang tải mô hình rec fine-tuned tại: {custom_rec_dir}")
+            ocr_kwargs["rec_model_dir"] = custom_rec_dir
             self.model_type = "fine-tuned"
         else:
             print("Không tìm thấy mô hình fine-tuned. Sử dụng mô hình tiếng Việt mặc định...")
-            self.ocr = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
             self.model_type = "default"
         
-        # Load Vietnamese correction model (Tier 1)
-        self.corrector.load()
+        # Nếu có det model fine-tuned
+        if os.path.exists(custom_det_dir) and os.listdir(custom_det_dir):
+            print(f"Đang tải mô hình det fine-tuned tại: {custom_det_dir}")
+            ocr_kwargs["det_model_dir"] = custom_det_dir
+        
+        self.ocr = PaddleOCR(**ocr_kwargs)
+        
+        # Bỏ Vietnamese corrector - model T5 đang làm worse cho ảnh y học/thảo dược
+        # (correction model được train trên văn bản chung, không phù hợp cho domain chuyên ngành)
+        # self.corrector.load()
+        self.corrector.ready = False
         
         print(f"OCR model đã sẵn sàng (type: {self.model_type}, correction: {self.corrector.ready})")
+    
+    def _preprocess_image(self, img):
+        """Tiền xử lý ảnh để cải thiện chất lượng OCR, đặc biệt cho ảnh y học/thảo dược."""
+        import cv2
+        import numpy as np
+        
+        h, w = img.shape[:2]
+        
+        # 1. Upscale ảnh nhỏ (nếu cạnh ngắn < 600px)
+        min_dim = min(h, w)
+        if min_dim < 600:
+            scale = 600.0 / min_dim
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        
+        # 2. Chuyển sang grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # 3. Denoise
+        denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+        
+        # 4. Tăng contrast bằng CLAHE
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(denoised)
+        
+        # 5. Binarization (Otsu threshold)
+        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # 6. Morphological opening để loại bỏ noise nhỏ
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        
+        # 7. Convert lại thành 3-channel vì PaddleOCR expects BGR
+        result = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+        
+        return result
     
     @modal.fastapi_endpoint(method="POST")
     def ocr_webhook(self, item: dict):
@@ -282,25 +328,28 @@ class OCRService:
             
             if img is None:
                 return {"error": "Failed to decode image from base64"}
+            
+            # Preprocess ảnh để cải thiện OCR quality
+            preprocessed = self._preprocess_image(img)
                 
-            result = self.ocr.ocr(img, cls=True)
+            result = self.ocr.ocr(preprocessed, cls=True)
             
             extracted_text = []
             if result and result[0]:
                 for line in result[0]:
-                    extracted_text.append(line[1][0])
+                    # line[1] = (text, confidence)
+                    text = line[1][0]
+                    conf = line[1][1]
+                    extracted_text.append({"text": text, "confidence": round(conf, 4)})
             
-            # Apply Vietnamese correction (Tier 1)
-            raw_text = "\n".join(extracted_text)
-            corrected_text = self.corrector.correct(raw_text) if self.corrector.ready else raw_text
+            raw_text = "\n".join([t["text"] for t in extracted_text])
                     
             return {
                 "status": "success",
                 "model_type": self.model_type,
-                "correction_applied": self.corrector.ready,
-                "text": corrected_text,
-                "raw_ocr_text": raw_text,
-                "raw_result": result
+                "text": raw_text,
+                "lines": extracted_text,
+                "lines_count": len(extracted_text)
             }
         except Exception as e:
             return {"error": str(e)}
@@ -326,8 +375,6 @@ class OCRService:
 # Global variables for model sharing inside the container
 ocr_model = None
 model_type_global = "default"
-fastapi_corrector = None
-
 @app.function(
     image=ocr_image,
     gpu="T4",
@@ -343,29 +390,45 @@ def fastapi_app():
     import cv2
     import fitz  # PyMuPDF
     
+    def _preprocess_image(img):
+        """Tiền xử lý ảnh để cải thiện chất lượng OCR, đặc biệt cho ảnh y học/thảo dược."""
+        h, w = img.shape[:2]
+        # Upscale ảnh nhỏ
+        min_dim = min(h, w)
+        if min_dim < 600:
+            scale = 600.0 / min_dim
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(denoised)
+        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        return cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        """Load PaddleOCR model + correction model on startup."""
-        global ocr_model, model_type_global, fastapi_corrector
+        """Load PaddleOCR model on startup."""
+        global ocr_model, model_type_global
         from paddleocr import PaddleOCR
         import os as _os
         try:
             vol.reload()
-            custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
-            if _os.path.exists(custom_model_dir) and _os.listdir(custom_model_dir):
-                print(f"Đang tải mô hình fine-tuned tại: {custom_model_dir}")
-                ocr_model = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
+            ocr_kwargs = dict(use_angle_cls=True, lang="vi", use_gpu=True, show_log=False)
+            custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+            custom_det_dir = "/vol/inference/vi_PP-OCRv5_server_det"
+            if _os.path.exists(custom_rec_dir) and _os.listdir(custom_rec_dir):
+                print(f"Đang tải mô hình rec fine-tuned tại: {custom_rec_dir}")
+                ocr_kwargs["rec_model_dir"] = custom_rec_dir
                 model_type_global = "fine-tuned"
             else:
                 print("Sử dụng mô hình tiếng Việt mặc định...")
-                ocr_model = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
                 model_type_global = "default"
-            
-            # Load Vietnamese correction model
-            fastapi_corrector = VietnameseCorrector()
-            fastapi_corrector.load()
-            
-            print(f"FastAPI OCR model loaded (type: {model_type_global}, correction: {fastapi_corrector.ready})")
+            if _os.path.exists(custom_det_dir) and _os.listdir(custom_det_dir):
+                ocr_kwargs["det_model_dir"] = custom_det_dir
+            ocr_model = PaddleOCR(**ocr_kwargs)
+            print(f"FastAPI OCR model loaded (type: {model_type_global})")
         except Exception as e:
             print(f"Lỗi khi load model: {e}")
             model_type_global = "error"
@@ -384,29 +447,43 @@ def fastapi_app():
         global ocr_model, model_type_global
         if ocr_model is None:
             from paddleocr import PaddleOCR
-            custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+            custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+            custom_det_dir = "/vol/inference/vi_PP-OCRv5_server_det"
             vol.reload()
-            if os.path.exists(custom_model_dir) and os.listdir(custom_model_dir):
-                print(f"Loading fine-tuned model from: {custom_model_dir}")
-                ocr_model = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
+            ocr_kwargs = dict(use_angle_cls=True, lang="vi", use_gpu=True, show_log=False)
+            if os.path.exists(custom_rec_dir) and os.listdir(custom_rec_dir):
+                print(f"Loading fine-tuned rec model from: {custom_rec_dir}")
+                ocr_kwargs["rec_model_dir"] = custom_rec_dir
                 model_type_global = "fine-tuned"
             else:
                 print("Loading default Vietnamese model...")
-                ocr_model = PaddleOCR(use_angle_cls=True, lang="vi", use_gpu=True)
                 model_type_global = "default"
+            if os.path.exists(custom_det_dir) and os.listdir(custom_det_dir):
+                ocr_kwargs["det_model_dir"] = custom_det_dir
+            ocr_model = PaddleOCR(**ocr_kwargs)
         return ocr_model
+
+    def _ocr_with_preprocessing(ocr, img):
+        """Run OCR with image preprocessing, return lines with confidence."""
+        preprocessed = _preprocess_image(img)
+        result = ocr.ocr(preprocessed, cls=True)
+        lines = []
+        if result and result[0]:
+            for line in result[0]:
+                text = line[1][0]
+                conf = line[1][1]
+                lines.append({"text": text, "confidence": round(conf, 4)})
+        return lines
 
     @web_app.post("/ocr")
     async def ocr_endpoint(file: UploadFile = File(...), pages: str = Form(None)):
         ocr = get_ocr_model()
         content = await file.read()
         
-        # Check if file is PDF
         is_pdf = file.filename.lower().endswith('.pdf') or file.content_type == 'application/pdf'
         
-        lines = []
+        all_lines = []
         box_count = 0
-        raw_results = []
         
         try:
             if is_pdf:
@@ -435,7 +512,6 @@ def fastapi_app():
                     
                 for page_idx in selected_pages:
                     page = doc.load_page(page_idx)
-                    # Render to high-resolution image (dpi = 150)
                     pix = page.get_pixmap(dpi=150)
                     img_data = pix.tobytes("png")
                     np_arr = np.frombuffer(img_data, np.uint8)
@@ -444,40 +520,30 @@ def fastapi_app():
                     if img is None:
                         continue
                     
-                    result = ocr.ocr(img, cls=True)
-                    if result and result[0]:
-                        raw_results.append({"page": page_idx + 1, "result": result})
-                        for line in result[0]:
-                            lines.append(line[1][0])
-                            box_count += 1
+                    page_lines = _ocr_with_preprocessing(ocr, img)
+                    for line in page_lines:
+                        line["page"] = page_idx + 1
+                        all_lines.append(line)
+                        box_count += 1
             else:
-                # Handle normal Image
                 np_arr = np.frombuffer(content, np.uint8)
                 img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                 if img is None:
                     raise HTTPException(status_code=400, detail="Invalid image format")
                     
-                result = ocr.ocr(img, cls=True)
-                if result and result[0]:
-                    raw_results.append({"page": 1, "result": result})
-                    for line in result[0]:
-                        lines.append(line[1][0])
-                        box_count += 1
+                all_lines = _ocr_with_preprocessing(ocr, img)
+                box_count = len(all_lines)
             
-            # Apply Vietnamese correction (Tier 1)
-            raw_text = "\n".join(lines)
-            corrected_text = fastapi_corrector.correct(raw_text) if fastapi_corrector and fastapi_corrector.ready else raw_text
+            raw_text = "\n".join([l["text"] for l in all_lines])
                         
             return {
                 "status": "success",
                 "model_type": model_type_global,
-                "correction_applied": fastapi_corrector.ready if fastapi_corrector else False,
-                "text": corrected_text,
-                "raw_ocr_text": raw_text,
-                "full_text": corrected_text,
-                "lines": corrected_text.split("\n"),
-                "box_count": box_count,
-                "raw_result": raw_results
+                "text": raw_text,
+                "full_text": raw_text,
+                "lines": all_lines,
+                "lines_count": box_count,
+                "box_count": box_count
             }
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
