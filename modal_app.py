@@ -62,6 +62,7 @@ vol = modal.Volume.from_name("viet-ocr-vol", create_if_missing=True)
 )
 def run_train(test_run: bool = False):
     import subprocess
+    import os
     print("Bắt đầu khởi chạy Job huấn luyện tiếng Việt (PP-OCRv5-server)...")
     
     # Reload volume để đồng bộ dữ liệu mới nhất
@@ -84,6 +85,14 @@ def run_train(test_run: bool = False):
         "Eval.dataset.data_dir=/vol/train_data/",
         "Eval.dataset.label_file_list=[/vol/train_data/val_list.txt]"
     ]
+    
+    # Tự động Resume nếu tìm thấy checkpoint cũ từ Epoch trước đó
+    latest_checkpoint = "/vol/output/vi_PP-OCRv5_server_rec/latest.pdparams"
+    if os.path.exists(latest_checkpoint):
+        print(f"Tìm thấy checkpoint cũ tại {latest_checkpoint}. Tự động Resume...")
+        # Loại bỏ đuôi .pdparams khi truyền vào Global.checkpoints của PaddleOCR
+        checkpoint_prefix = "/vol/output/vi_PP-OCRv5_server_rec/latest"
+        cmd.append(f"Global.checkpoints={checkpoint_prefix}")
     
     if test_run:
         print("Đang chạy chế độ kiểm thử (test_run=True): Giới hạn 1 epoch và giảm workers...")
@@ -225,6 +234,31 @@ class VietnameseCorrector:
 # Singleton instance for sharing across functions
 corrector = VietnameseCorrector()
 
+# ==========================================
+# Herbal/Medical Dictionary Correction
+# ==========================================
+HERBAL_CORRECTIONS = {
+    "chüa": "chữa", "bönh": "bệnh", "bénh": "bệnh",
+    "huyét": "huyết", "huyêt": "huyết",
+    "Tiéu chay": "Tiêu chảy", "tieu chay": "tiêu chảy",
+    "Nuóc": "Nước", "nuöc": "nước", "nuóc": "nước",
+    "Sat trung": "Sát trùng", "Sát tring": "Sát trùng",
+    "Sat trüng": "Sát trùng",
+    "L miêng": "Lở miệng", "L ming": "Lở miệng",
+    "Kit ly": "Kiết lỵ", 
+    "phat st": "phát sốt", "Cam mao": "Cảm mạo",
+    "thao dudng": "tháo đường", "Dái thao": "Đái tháo",
+    "tuoi": "tươi", "nhuyén": "nhuyễn",
+    "bt nháo": "bột nhão", "kh nau": "khô nấu",
+    "gia nat": "giã nát", "nhiu lan": "nhiều lần",
+    "vc ": "vốc "
+}
+
+def apply_herbal_corrections(text: str) -> str:
+    for wrong, correct in HERBAL_CORRECTIONS.items():
+        text = text.replace(wrong, correct)
+    return text
+
 # 3. OCR Service: Class-based để giữ model trong bộ nhớ GPU giữa các request
 @app.cls(
     image=ocr_image,
@@ -274,6 +308,37 @@ class OCRService:
         
         print(f"OCR model đã sẵn sàng (type: {self.model_type}, correction: {self.corrector.ready})")
     
+    def _split_columns(self, img):
+        """Phát hiện layout 2 cột bằng vertical projection profile."""
+        import cv2
+        import numpy as np
+        h, w = img.shape[:2]
+        if w < 300:
+            return [img]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        col_sum = np.sum(binary, axis=0)
+        start_w = int(w * 0.3)
+        end_w = int(w * 0.7)
+        mid_col_sum = col_sum[start_w:end_w]
+        threshold = np.max(col_sum) * 0.02
+        gap_cols = np.where(mid_col_sum <= threshold)[0] + start_w
+        if len(gap_cols) > 0:
+            max_gap_start, max_gap_len, current_start, current_len = -1, 0, gap_cols[0], 1
+            for i in range(1, len(gap_cols)):
+                if gap_cols[i] == gap_cols[i-1] + 1:
+                    current_len += 1
+                else:
+                    if current_len > max_gap_len:
+                        max_gap_len, max_gap_start = current_len, current_start
+                    current_start, current_len = gap_cols[i], 1
+            if current_len > max_gap_len:
+                max_gap_len, max_gap_start = current_len, current_start
+            if max_gap_len >= 15:
+                split_point = max_gap_start + max_gap_len // 2
+                return [img[:, :split_point], img[:, split_point:]]
+        return [img]
+
     def _preprocess_image(self, img):
         """Tiền xử lý ảnh để cải thiện chất lượng OCR, đặc biệt cho ảnh y học/thảo dược."""
         import cv2
@@ -281,10 +346,10 @@ class OCRService:
         
         h, w = img.shape[:2]
         
-        # 1. Upscale ảnh nhỏ (nếu cạnh ngắn < 600px)
+        # 1. Upscale ảnh nhỏ (tăng lên 1200px)
         min_dim = min(h, w)
-        if min_dim < 600:
-            scale = 600.0 / min_dim
+        if min_dim < 1200:
+            scale = 1200.0 / min_dim
             img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         
         # 2. Chuyển sang grayscale
@@ -297,11 +362,17 @@ class OCRService:
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(denoised)
         
-        # 5. Binarization (Otsu threshold)
-        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # 5. Binarization (Adaptive threshold thay cho Otsu)
+        binary = cv2.adaptiveThreshold(
+            enhanced, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            blockSize=15,
+            C=8
+        )
         
-        # 6. Morphological opening để loại bỏ noise nhỏ
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        # 6. Morphological opening để loại bỏ noise nhỏ (kernel nhỏ)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
         cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
         
         # 7. Convert lại thành 3-channel vì PaddleOCR expects BGR
@@ -329,18 +400,20 @@ class OCRService:
             if img is None:
                 return {"error": "Failed to decode image from base64"}
             
-            # Preprocess ảnh để cải thiện OCR quality
-            preprocessed = self._preprocess_image(img)
-                
-            result = self.ocr.ocr(preprocessed, cls=True)
-            
+            # Phát hiện và cắt cột nếu có
+            img_parts = self._split_columns(img)
             extracted_text = []
-            if result and result[0]:
-                for line in result[0]:
-                    # line[1] = (text, confidence)
-                    text = line[1][0]
-                    conf = line[1][1]
-                    extracted_text.append({"text": text, "confidence": round(conf, 4)})
+            
+            for part in img_parts:
+                # Preprocess ảnh để cải thiện OCR quality
+                preprocessed = self._preprocess_image(part)
+                result = self.ocr.ocr(preprocessed, cls=True)
+                
+                if result and result[0]:
+                    for line in result[0]:
+                        text = apply_herbal_corrections(line[1][0])
+                        conf = line[1][1]
+                        extracted_text.append({"text": text, "confidence": round(conf, 4)})
             
             raw_text = "\n".join([t["text"] for t in extracted_text])
                     
@@ -390,20 +463,47 @@ def fastapi_app():
     import cv2
     import fitz  # PyMuPDF
     
+    def _split_columns(img):
+        h, w = img.shape[:2]
+        if w < 300:
+            return [img]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        col_sum = np.sum(binary, axis=0)
+        start_w = int(w * 0.3)
+        end_w = int(w * 0.7)
+        mid_col_sum = col_sum[start_w:end_w]
+        threshold = np.max(col_sum) * 0.02
+        gap_cols = np.where(mid_col_sum <= threshold)[0] + start_w
+        if len(gap_cols) > 0:
+            max_gap_start, max_gap_len, current_start, current_len = -1, 0, gap_cols[0], 1
+            for i in range(1, len(gap_cols)):
+                if gap_cols[i] == gap_cols[i-1] + 1:
+                    current_len += 1
+                else:
+                    if current_len > max_gap_len:
+                        max_gap_len, max_gap_start = current_len, current_start
+                    current_start, current_len = gap_cols[i], 1
+            if current_len > max_gap_len:
+                max_gap_len, max_gap_start = current_len, current_start
+            if max_gap_len >= 15:
+                split_point = max_gap_start + max_gap_len // 2
+                return [img[:, :split_point], img[:, split_point:]]
+        return [img]
+
     def _preprocess_image(img):
         """Tiền xử lý ảnh để cải thiện chất lượng OCR, đặc biệt cho ảnh y học/thảo dược."""
         h, w = img.shape[:2]
-        # Upscale ảnh nhỏ
         min_dim = min(h, w)
-        if min_dim < 600:
-            scale = 600.0 / min_dim
+        if min_dim < 1200:
+            scale = 1200.0 / min_dim
             img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
         enhanced = clahe.apply(denoised)
-        _, binary = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+        binary = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, blockSize=15, C=8)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
         cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
         return cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
 
@@ -464,15 +564,17 @@ def fastapi_app():
         return ocr_model
 
     def _ocr_with_preprocessing(ocr, img):
-        """Run OCR with image preprocessing, return lines with confidence."""
-        preprocessed = _preprocess_image(img)
-        result = ocr.ocr(preprocessed, cls=True)
+        """Run OCR with column splitting and image preprocessing, return lines with confidence."""
+        img_parts = _split_columns(img)
         lines = []
-        if result and result[0]:
-            for line in result[0]:
-                text = line[1][0]
-                conf = line[1][1]
-                lines.append({"text": text, "confidence": round(conf, 4)})
+        for part in img_parts:
+            preprocessed = _preprocess_image(part)
+            result = ocr.ocr(preprocessed, cls=True)
+            if result and result[0]:
+                for line in result[0]:
+                    text = apply_herbal_corrections(line[1][0])
+                    conf = line[1][1]
+                    lines.append({"text": text, "confidence": round(conf, 4)})
         return lines
 
     @web_app.post("/ocr")
@@ -569,7 +671,7 @@ def test_env():
     print("Python version:", sys.version)
     print("Working directory:", os.getcwd())
 
-    dict_path = "ppocr/utils/dict/vi_custom_dict.txt"
+    dict_path = "ppocr/utils/dict/ppocrv5_dict.txt"
     train_list_path = "/vol/train_data/train_list.txt"
     val_list_path = "/vol/train_data/val_list.txt"
     
