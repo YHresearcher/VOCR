@@ -78,7 +78,8 @@ def run_train(test_run: bool = False):
     cmd = [
         "python", "tools/train.py",
         "-c", "configs/rec/PP-OCRv5/PP-OCRv5_server_rec.yml",
-        "-o", "Global.save_model_dir=/vol/output/vi_PP-OCRv5_server_rec",
+        "-o", "Global.pretrained_model=/vol/pretrain_models/PP-OCRv5_server_rec_pretrained",
+        "Global.save_model_dir=/vol/output/vi_PP-OCRv5_server_rec",
         "Train.dataset.data_dir=/vol/train_data/",
         "Train.dataset.label_file_list=[/vol/train_data/train_list.txt]",
         "Eval.dataset.data_dir=/vol/train_data/",
@@ -571,9 +572,9 @@ def prepare_dataset():
     os.makedirs("/vol/train_data", exist_ok=True)
     
     # 2. Tải pre-trained weights
-    pretrained_dest = "/vol/pretrain_models/latin_PP-OCRv5_mobile_rec_pretrained.pdparams"
+    pretrained_dest = "/vol/pretrain_models/PP-OCRv5_server_rec_pretrained.pdparams"
     if not os.path.exists(pretrained_dest):
-        pretrained_url = "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_pretrained_model/latin_PP-OCRv5_mobile_rec_pretrained.pdparams"
+        pretrained_url = "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_pretrained_model/PP-OCRv5_server_rec_pretrained.pdparams"
         print(f"Đang tải pre-trained weights từ {pretrained_url}...")
         try:
             r = requests.get(pretrained_url, stream=True)
