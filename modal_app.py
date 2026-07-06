@@ -13,14 +13,14 @@ ocr_image = (
     .env({
         "LD_LIBRARY_PATH": "/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
     })
-    .pip_install("numpy==1.26.4") # Bắt buộc cài đặt NumPy 1.x để tương thích với Paddle 2.6
-    .pip_install("paddlepaddle-gpu==2.6.0") # PaddlePaddle 2.6.0 với CUDA 11.8 (đã cache)
+    .pip_install("numpy==1.26.4") # NumPy 1.x cho tương thích tốt
+    .pip_install("paddlepaddle-gpu==3.0.0") # PaddlePaddle 3.0 cho PP-OCRv5
     .pip_install("imaug")
     .pip_install("fastapi[standard]") # Bắt buộc cho các hàm fastapi_endpoint trong các bản Modal mới
     .pip_install("gdown") # Sử dụng để tải tệp lớn từ Google Drive một cách tin cậy
     .pip_install("pymupdf") # Thư viện xử lý PDF trực tiếp trên backend
     .pip_install_from_requirements("requirements.txt")
-    .pip_install("paddleocr==2.7.3") # v2.7.3 không phụ thuộc paddlex — ổn định với Paddle 2.6
+    # paddleocr installed from source (release/3.0) in .run_commands below
     .pip_install("transformers", "torch", "sentencepiece") # HuggingFace correction model
     .add_local_dir(
         ".",
@@ -39,10 +39,11 @@ ocr_image = (
             "**/*.pyc"
         ]
     )
-    # Tải mã nguồn PaddleOCR 2.7 (tools/, configs/, ppocr/) cho training/export
+    # Tải mã nguồn PaddleOCR 3.0 (tools/, configs/, ppocr/) cho training/export
     # vì framework đã bị xóa khỏi repo local để giữ repo sạch
     .run_commands(
-        "git clone --depth 1 --branch release/2.7 https://github.com/PaddlePaddle/PaddleOCR.git /tmp/poco-src "
+        "git clone --depth 1 --branch release/3.0 https://github.com/PaddlePaddle/PaddleOCR.git /tmp/poco-src "
+        "&& pip install /tmp/poco-src "
         "&& cp -r /tmp/poco-src/tools /root/tools "
         "&& cp -r /tmp/poco-src/configs /root/configs "
         "&& cp -r /tmp/poco-src/ppocr /root/ppocr "
@@ -76,7 +77,7 @@ def run_train(test_run: bool = False):
     # Gọi trực tiếp kịch bản train của PaddleOCR với các tham số ghi đè sang /vol
     cmd = [
         "python", "tools/train.py",
-        "-c", "configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml",
+        "-c", "configs/rec/PP-OCRv5/PP-OCRv5_server_rec.yml",
         "-o", "Global.save_model_dir=/vol/output/vi_PP-OCRv5_server_rec",
         "Train.dataset.data_dir=/vol/train_data/",
         "Train.dataset.label_file_list=[/vol/train_data/train_list.txt]",
@@ -123,7 +124,7 @@ def run_export():
         
     cmd = [
         "python", "tools/export_model.py",
-        "-c", "configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml",
+        "-c", "configs/rec/PP-OCRv5/PP-OCRv5_server_rec.yml",
         "-o", f"Global.pretrained_model={best_model_path}",
         "Global.save_inference_dir=/vol/inference/vi_PP-OCRv5_server_rec"
     ]
