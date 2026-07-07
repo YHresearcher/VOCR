@@ -80,12 +80,30 @@ def run_train(test_run: bool = False):
         "-c", "configs/rec/PP-OCRv5/PP-OCRv5_server_rec.yml",
         "-o", "Global.pretrained_model=/vol/pretrain_models/PP-OCRv5_server_rec_pretrained",
         "Global.save_model_dir=/vol/output/vi_PP-OCRv5_server_rec",
+        "Global.character_dict_path=ppocr/utils/dict/vi_dict.txt",  # Sử dụng từ điển tiếng Việt chuẩn
         "Train.dataset.data_dir=/vol/train_data/",
         "Train.dataset.label_file_list=[/vol/train_data/train_list.txt]",
         "Eval.dataset.data_dir=/vol/train_data/",
         "Eval.dataset.label_file_list=[/vol/train_data/val_list.txt]"
     ]
     
+    # Kiểm tra xem checkpoint cũ có bị lệch từ điển không (nếu có, cần dọn dẹp để tránh lỗi lệch shape phân loại)
+    old_output_dir = "/vol/output/vi_PP-OCRv5_server_rec"
+    config_old = os.path.join(old_output_dir, "config.yml")
+    if os.path.exists(config_old):
+        try:
+            with open(config_old, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+                if "ppocrv5_dict.txt" in content or "vi_custom_dict.txt" in content:
+                    print("Phát hiện checkpoint cũ sử dụng từ điển cũ (ppocrv5_dict). Đang tự động dọn dẹp để train lại với vi_dict.txt...")
+                    import shutil
+                    shutil.rmtree(old_output_dir, ignore_errors=True)
+                    os.makedirs(old_output_dir, exist_ok=True)
+                    # Commit volume để cập nhật việc xóa file
+                    vol.commit()
+        except Exception as e:
+            print(f"Lỗi kiểm tra cấu hình cũ: {e}")
+
     # Tự động Resume nếu tìm thấy checkpoint cũ từ Epoch trước đó
     latest_checkpoint = "/vol/output/vi_PP-OCRv5_server_rec/latest.pdparams"
     if os.path.exists(latest_checkpoint):
