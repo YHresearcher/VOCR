@@ -63,7 +63,16 @@ document.addEventListener('DOMContentLoaded', () => {
 // Setup Event Listeners
 function setupEventListeners() {
     // File Inputs
-    elements.dropzone.addEventListener('click', () => elements.fileInput.click());
+    elements.dropzone.addEventListener('click', (e) => {
+        // Chỉ kích hoạt chọn file nếu chưa tải file nào (đang ở màn hình mặc định)
+        // và click không bắt nguồn từ chính file-input để tránh lặp bong bóng sự kiện (event bubbling)
+        if (e.target !== elements.fileInput && !currentFile) {
+            elements.fileInput.click();
+        }
+    });
+    elements.fileInput.addEventListener('click', (e) => {
+        e.stopPropagation();
+    });
     elements.fileInput.addEventListener('change', handleFileSelect);
 
     // Drag and Drop

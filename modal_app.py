@@ -153,7 +153,9 @@ def run_export():
         "python", "tools/export_model.py",
         "-c", "configs/rec/PP-OCRv5/PP-OCRv5_server_rec.yml",
         "-o", f"Global.pretrained_model={best_model_path}",
-        "Global.save_inference_dir=/vol/inference/vi_PP-OCRv5_server_rec"
+        "Global.save_inference_dir=/vol/inference/vi_PP-OCRv5_server_rec",
+        "Global.character_dict_path=ppocr/utils/dict/vi_dict.txt",
+        "Global.export_with_pir=False"
     ]
     try:
         subprocess.run(cmd, check=True)
@@ -307,6 +309,7 @@ class OCRService:
         if os.path.exists(custom_rec_dir) and os.listdir(custom_rec_dir):
             print(f"Đang tải mô hình rec fine-tuned tại: {custom_rec_dir}")
             ocr_kwargs["rec_model_dir"] = custom_rec_dir
+            ocr_kwargs["rec_char_dict_path"] = "/root/ppocr/utils/dict/vi_dict.txt"
             self.model_type = "fine-tuned"
         else:
             print("Không tìm thấy mô hình fine-tuned. Sử dụng mô hình tiếng Việt mặc định...")
@@ -689,7 +692,7 @@ def test_env():
     print("Python version:", sys.version)
     print("Working directory:", os.getcwd())
 
-    dict_path = "ppocr/utils/dict/ppocrv5_dict.txt"
+    dict_path = "ppocr/utils/dict/vi_dict.txt"
     train_list_path = "/vol/train_data/train_list.txt"
     val_list_path = "/vol/train_data/val_list.txt"
     
