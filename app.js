@@ -260,6 +260,8 @@ function resetUpload() {
     elements.pdfScanMode.disabled = false;
     elements.pdfPageInput.disabled = false;
     elements.pdfOptionsContainer.classList.add('hidden');
+    document.getElementById('pdf-custom-pages-row').classList.add('hidden');
+    document.getElementById('pdf-custom-pages').value = '';
     document.getElementById('layout-options-container').classList.add('hidden');
     document.getElementById('layout-mode').value = 'auto';
     elements.pdfPreviewCanvas.classList.add('hidden');
@@ -320,6 +322,15 @@ async function processOcr() {
             if (scanMode === 'current') {
                 formData.append('pages', pdfPageNum.toString());
                 showToast(`Đang gửi trang ${pdfPageNum} đi nhận dạng...`, 'success');
+            } else if (scanMode === 'custom') {
+                const customPages = document.getElementById('pdf-custom-pages').value.trim();
+                if (!customPages) {
+                    showToast('Vui lòng nhập số trang cần quét!', 'error');
+                    elements.loadingOverlay.classList.add('hidden');
+                    return;
+                }
+                formData.append('pages', customPages);
+                showToast(`Đang gửi các trang (${customPages}) đi nhận dạng...`, 'success');
             } else {
                 showToast('Đang tải và nhận dạng toàn bộ tài liệu PDF...', 'success');
             }
@@ -545,16 +556,27 @@ function showToast(message, type = 'success') {
 
 // PDF Scan Mode Change Listener
 function handleScanModeChange(e) {
-    const isAll = e.target.value === 'all';
+    const mode = e.target.value;
+    const isAll = mode === 'all';
+    const isCustom = mode === 'custom';
+
+    const customPagesRow = document.getElementById('pdf-custom-pages-row');
+    if (isCustom) {
+        customPagesRow.classList.remove('hidden');
+    } else {
+        customPagesRow.classList.add('hidden');
+    }
 
     // Disable/enable page navigation based on mode
-    elements.btnPrevPage.disabled = isAll || (pdfPageNum <= 1);
-    elements.btnNextPage.disabled = isAll || (pdfPageNum >= (pdfDoc ? pdfDoc.numPages : 1));
-    elements.pdfPageInput.disabled = isAll;
+    elements.btnPrevPage.disabled = isAll || isCustom || (pdfPageNum <= 1);
+    elements.btnNextPage.disabled = isAll || isCustom || (pdfPageNum >= (pdfDoc ? pdfDoc.numPages : 1));
+    elements.pdfPageInput.disabled = isAll || isCustom;
 
     const helpText = document.getElementById('pdf-page-help-text');
     if (isAll) {
         helpText.textContent = "Toàn bộ các trang trong tài liệu PDF sẽ được nhận dạng chữ.";
+    } else if (isCustom) {
+        helpText.textContent = "Nhập danh sách trang cần quét, phân tách bằng dấu phẩy. Ví dụ: 1, 3, 5-8";
     } else {
         helpText.textContent = "Di chuyển qua lại hoặc nhập số trang để chọn trang muốn nhận dạng chữ.";
     }

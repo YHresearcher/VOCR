@@ -957,3 +957,22 @@ textarea#text-output:focus {
     background: white;
     color: var(--text-primary);
 }
+
+.pdf-mode-input {
+    font-family: var(--font-main);
+    background: rgba(0, 0, 0, 0.03);
+    border: 1px solid rgba(16, 185, 129, 0.15);
+    border-radius: 8px;
+    color: var(--text-primary);
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    outline: none;
+    transition: var(--transition-smooth);
+}
+
+.pdf-mode-input:focus {
+    border-color: var(--primary);
+    background: rgba(255, 255, 255, 1);
+    box-shadow: var(--gradient-glow);
+}

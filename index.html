@@ -74,7 +74,12 @@
                         <select id="pdf-scan-mode" class="pdf-mode-select">
                             <option value="current" selected>Chỉ quét trang hiện tại</option>
                             <option value="all">Quét toàn bộ tài liệu</option>
+                            <option value="custom">Tùy chọn trang quét</option>
                         </select>
+                    </div>
+                    <div class="pdf-scan-mode-row hidden" id="pdf-custom-pages-row" style="margin-top: 0.5rem;">
+                        <label for="pdf-custom-pages" class="pdf-mode-label">Nhập số trang:</label>
+                        <input type="text" id="pdf-custom-pages" class="pdf-mode-input" placeholder="Ví dụ: 1, 3, 5-8" style="width: 160px;">
                     </div>
                     <div class="pdf-page-controls" id="pdf-page-controls-container">
                         <button type="button" class="btn-page-nav" id="btn-prev-page" title="Trang trước" disabled>
