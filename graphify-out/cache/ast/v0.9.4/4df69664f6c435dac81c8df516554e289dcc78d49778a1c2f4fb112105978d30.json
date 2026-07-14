@@ -1,1 +1,0 @@
-{"nodes": [{"id": "pkg_github_com_paddlepaddle_paddleocr_api_sdk_go", "label": "github.com/PaddlePaddle/PaddleOCR/api_sdk/go", "file_type": "code", "type": "package", "ecosystem": "go", "source_file": "api_sdk/go/go.mod", "source_location": "L1"}], "edges": []}

@@ -33,3 +33,6 @@ Thumbs.db
 
 # Graphify
 graphify-out/
+
+# Temporary Cleanup Storage
+.temp/
