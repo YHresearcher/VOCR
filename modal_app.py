@@ -36,6 +36,7 @@ ocr_image = (
             ".gemini", 
             "artifacts", 
             "paddleocr",
+            ".temp",
             "**/*.pyc"
         ]
     )
