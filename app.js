@@ -2,6 +2,7 @@
 const API_BASE_URL = 'https://yhresearcher--vietocr-service-fastapi-app-fastapi-app.modal.run';
 let currentFile = null;
 let ocrResult = null;
+let authCredentials = null;
 
 // PDF Rendering State
 let pdfDoc = null;
@@ -56,6 +57,17 @@ const elements = {
 
 // Initialize Application
 document.addEventListener('DOMContentLoaded', () => {
+    const savedAuth = localStorage.getItem('vietocr_auth');
+    if (savedAuth) {
+        try {
+            authCredentials = JSON.parse(savedAuth);
+            document.getElementById('login-overlay-fullscreen').classList.add('hidden');
+            document.getElementById('btn-logout').classList.remove('hidden');
+        } catch (e) {
+            localStorage.removeItem('vietocr_auth');
+        }
+    }
+    
     checkApiStatus();
     setupEventListeners();
 });
@@ -127,6 +139,23 @@ function setupEventListeners() {
     // Downloads
     elements.btnDownloadTxt.addEventListener('click', downloadTxtFile);
     elements.btnDownloadJson.addEventListener('click', downloadJsonFile);
+
+    // Auth events
+    const loginForm = document.getElementById('login-form');
+    if (loginForm) {
+        loginForm.addEventListener('submit', handleLogin);
+    }
+    const btnLogout = document.getElementById('btn-logout');
+    if (btnLogout) {
+        btnLogout.addEventListener('click', logout);
+    }
+}
+
+// Get Authorization headers
+function getAuthHeaders() {
+    if (!authCredentials) return {};
+    const hash = btoa(`${authCredentials.username}:${authCredentials.password}`);
+    return { 'Authorization': `Basic ${hash}` };
 }
 
 // Check if API is Online
@@ -135,16 +164,33 @@ async function checkApiStatus() {
     const indicator = badge.querySelector('.status-indicator');
     const label = badge.querySelector('.status-label');
 
+    if (!authCredentials) {
+        indicator.className = 'status-indicator offline';
+        label.innerText = 'Chưa đăng nhập';
+        return;
+    }
+
     try {
-        const response = await fetch(`${API_BASE_URL}/`, { method: 'GET' });
+        const response = await fetch(`${API_BASE_URL}/`, { 
+            method: 'GET',
+            headers: getAuthHeaders()
+        });
         if (response.ok) {
             const data = await response.json();
             if (data.status === 'running') {
                 indicator.className = 'status-indicator online';
                 label.innerText = 'API Sẵn sàng (Modal)';
                 showToast('Kết nối API thành công!', 'success');
+                
+                // Ensure UI is corrected if we checked successfully
+                document.getElementById('login-overlay-fullscreen').classList.add('hidden');
+                document.getElementById('btn-logout').classList.remove('hidden');
                 return;
             }
+        } else if (response.status === 401) {
+            showToast('Tài khoản hoặc mật khẩu không hợp lệ.', 'error');
+            logout();
+            return;
         }
         throw new Error('API returns invalid health data.');
     } catch (error) {
@@ -342,7 +388,8 @@ async function processOcr() {
 
         const response = await fetch(`${API_BASE_URL}/ocr`, {
             method: 'POST',
-            body: formData
+            body: formData,
+            headers: getAuthHeaders()
         });
 
         if (!response.ok) {
@@ -582,4 +629,70 @@ function handleScanModeChange(e) {
     } else {
         helpText.textContent = "Di chuyển qua lại hoặc nhập số trang để chọn trang muốn nhận dạng chữ.";
     }
+}
+
+// Authentication Handlers
+async function handleLogin(e) {
+    e.preventDefault();
+    const usernameInput = document.getElementById('login-username').value.trim();
+    const passwordInput = document.getElementById('login-password').value.trim();
+
+    if (!usernameInput || !passwordInput) {
+        showToast('Vui lòng nhập đầy đủ thông tin!', 'error');
+        return;
+    }
+
+    // Set temporarily
+    authCredentials = { username: usernameInput, password: passwordInput };
+
+    const badge = elements.apiStatusBadge;
+    const indicator = badge.querySelector('.status-indicator');
+    const label = badge.querySelector('.status-label');
+    indicator.className = 'status-indicator pinging';
+    label.innerText = 'Đang xác thực...';
+
+    try {
+        const hash = btoa(`${usernameInput}:${passwordInput}`);
+        const response = await fetch(`${API_BASE_URL}/`, {
+            method: 'GET',
+            headers: { 'Authorization': `Basic ${hash}` }
+        });
+
+        if (response.ok) {
+            localStorage.setItem('vietocr_auth', JSON.stringify(authCredentials));
+            document.getElementById('login-overlay-fullscreen').classList.add('hidden');
+            document.getElementById('btn-logout').classList.remove('hidden');
+            indicator.className = 'status-indicator online';
+            label.innerText = 'API Sẵn sàng (Modal)';
+            showToast('Đăng nhập thành công!', 'success');
+        } else {
+            authCredentials = null;
+            indicator.className = 'status-indicator offline';
+            label.innerText = 'Chưa đăng nhập';
+            showToast('Tài khoản hoặc mật khẩu không chính xác.', 'error');
+        }
+    } catch (error) {
+        authCredentials = null;
+        indicator.className = 'status-indicator offline';
+        label.innerText = 'Không kết nối được';
+        showToast('Không kết nối được server để xác thực.', 'error');
+        console.error(error);
+    }
+}
+
+function logout() {
+    authCredentials = null;
+    localStorage.removeItem('vietocr_auth');
+    document.getElementById('login-overlay-fullscreen').classList.remove('hidden');
+    document.getElementById('btn-logout').classList.add('hidden');
+    document.getElementById('login-username').value = '';
+    document.getElementById('login-password').value = '';
+
+    const badge = elements.apiStatusBadge;
+    const indicator = badge.querySelector('.status-indicator');
+    const label = badge.querySelector('.status-label');
+    indicator.className = 'status-indicator offline';
+    label.innerText = 'Chưa đăng nhập';
+
+    showToast('Đã đăng xuất tài khoản.', 'success');
 }

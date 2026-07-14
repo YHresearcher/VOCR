@@ -33,9 +33,14 @@
                 <i class="fa-solid fa-brain logo-icon"></i>
                 <span class="logo-text">Viet<span class="gradient-text">OCR</span> Portal</span>
             </div>
-            <div class="api-status" id="api-status-badge">
-                <span class="status-indicator pinging"></span>
-                <span class="status-label">Đang kiểm tra API...</span>
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+                <div class="api-status" id="api-status-badge">
+                    <span class="status-indicator pinging"></span>
+                    <span class="status-label">Đang kiểm tra API...</span>
+                </div>
+                <button type="button" class="btn-logout hidden" id="btn-logout" title="Đăng xuất">
+                    <i class="fa-solid fa-right-from-bracket"></i> Đăng xuất
+                </button>
             </div>
         </header>
 
@@ -208,6 +213,30 @@
 
     <!-- Notification Toast -->
     <div class="toast-container" id="toast-container"></div>
+
+    <!-- Fullscreen Login Overlay -->
+    <div class="login-overlay-fullscreen" id="login-overlay-fullscreen">
+        <div class="login-card">
+            <div class="login-header">
+                <i class="fa-solid fa-brain login-logo"></i>
+                <h2>VietOCR Portal</h2>
+                <p>Đăng nhập để sử dụng dịch vụ nhận dạng chữ</p>
+            </div>
+            <form id="login-form" class="login-form">
+                <div class="input-group">
+                    <label for="login-username"><i class="fa-solid fa-user"></i> Tài khoản</label>
+                    <input type="text" id="login-username" class="pdf-mode-input" placeholder="Tên đăng nhập" required>
+                </div>
+                <div class="input-group">
+                    <label for="login-password"><i class="fa-solid fa-lock"></i> Mật khẩu</label>
+                    <input type="password" id="login-password" class="pdf-mode-input" placeholder="Mật khẩu" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-login-submit">
+                    <i class="fa-solid fa-sign-in-alt"></i> Đăng nhập
+                </button>
+            </form>
+        </div>
+    </div>
 
     <!-- Custom Script -->
     <script src="app.js?v=50mb"></script>

@@ -620,6 +620,11 @@ def fastapi_app():
             model_type_global = "error"
         yield
 
+    from fastapi import Depends, status
+    from fastapi.security import HTTPBasic, HTTPBasicCredentials
+    import hashlib
+    import secrets
+
     web_app = FastAPI(title="VietOCR Service API", lifespan=lifespan)
     web_app.add_middleware(
         CORSMiddleware,
@@ -628,6 +633,21 @@ def fastapi_app():
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    security = HTTPBasic()
+    USER_HASH = "99e568eec5d94807cf688012b3913344c9092f17e2781d815a882714a7312e26"
+    PASS_HASH = "454a7e83598c8cd11416b8ba6c3850c2b2b4bc83272bb7a4579ee9c1658dd516"
+
+    def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
+        correct_username = hashlib.sha256(credentials.username.encode("utf-8")).hexdigest() == USER_HASH
+        correct_password = hashlib.sha256(credentials.password.encode("utf-8")).hexdigest() == PASS_HASH
+        if not (correct_username and correct_password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username or password",
+                headers={"WWW-Authenticate": "Basic"},
+            )
+        return credentials.username
 
     def get_ocr_model():
         global ocr_model, model_type_global
@@ -665,7 +685,7 @@ def fastapi_app():
         return lines
 
     @web_app.post("/ocr")
-    async def ocr_endpoint(file: UploadFile = File(...), pages: str = Form(None), layout_mode: str = Form("auto")):
+    async def ocr_endpoint(file: UploadFile = File(...), pages: str = Form(None), layout_mode: str = Form("auto"), username: str = Depends(verify_credentials)):
         ocr = get_ocr_model()
         content = await file.read()
         
@@ -763,7 +783,7 @@ def fastapi_app():
             raise HTTPException(status_code=500, detail=str(e))
 
     @web_app.get("/")
-    async def health_endpoint():
+    async def health_endpoint(username: str = Depends(verify_credentials)):
         return {
             "status": "running",
             "model_type": "ready",
