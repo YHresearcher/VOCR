@@ -180,6 +180,7 @@ function validateAndSetFile(file) {
     }
 
     currentFile = file;
+    elements.dropzone.classList.add('has-file');
 
     if (isPDF) {
         // Reset image previews
@@ -250,6 +251,7 @@ function resetUpload() {
     currentFile = null;
     elements.fileInput.value = '';
     elements.imageElement.src = '#';
+    elements.dropzone.classList.remove('has-file');
 
     // Reset PDF States
     pdfDoc = null;

@@ -63,54 +63,57 @@
                     </div>
                 </div>
 
-                <!-- PDF Options Selector (Hidden by default) -->
-                <div class="pdf-options-container hidden" id="pdf-options-container">
-                    <div class="pdf-options-title">
-                        <i class="fa-solid fa-file-pdf"></i>
-                        <span>Tùy chọn quét tài liệu PDF</span>
-                    </div>
-                    <div class="pdf-scan-mode-row">
-                        <label for="pdf-scan-mode" class="pdf-mode-label">Chế độ quét:</label>
-                        <select id="pdf-scan-mode" class="pdf-mode-select">
-                            <option value="current" selected>Chỉ quét trang hiện tại</option>
-                            <option value="all">Quét toàn bộ tài liệu</option>
-                            <option value="custom">Tùy chọn trang quét</option>
-                        </select>
-                    </div>
-                    <div class="pdf-scan-mode-row hidden" id="pdf-custom-pages-row" style="margin-top: 0.5rem;">
-                        <label for="pdf-custom-pages" class="pdf-mode-label">Nhập số trang:</label>
-                        <input type="text" id="pdf-custom-pages" class="pdf-mode-input" placeholder="Ví dụ: 1, 3, 5-8" style="width: 160px;">
-                    </div>
-                    <div class="pdf-page-controls" id="pdf-page-controls-container">
-                        <button type="button" class="btn-page-nav" id="btn-prev-page" title="Trang trước" disabled>
-                            <i class="fa-solid fa-chevron-left"></i>
-                        </button>
-                        <div class="pdf-page-indicator">
-                            Trang <input type="number" id="pdf-page-input" value="1" min="1" max="1"> / <span
-                                id="pdf-total-pages">1</span>
+                <!-- Cấu hình tài liệu (Document Controls) -->
+                <div class="document-controls" id="document-controls">
+                    <!-- PDF Options Selector (Hidden by default) -->
+                    <div class="pdf-options-container hidden" id="pdf-options-container">
+                        <div class="pdf-options-title">
+                            <i class="fa-solid fa-file-pdf"></i>
+                            <span>Tùy chọn quét tài liệu PDF</span>
                         </div>
-                        <button type="button" class="btn-page-nav" id="btn-next-page" title="Trang sau" disabled>
-                            <i class="fa-solid fa-chevron-right"></i>
-                        </button>
+                        <div class="pdf-scan-mode-row">
+                            <label for="pdf-scan-mode" class="pdf-mode-label">Chế độ quét:</label>
+                            <select id="pdf-scan-mode" class="pdf-mode-select">
+                                <option value="current" selected>Chỉ quét trang hiện tại</option>
+                                <option value="all">Quét toàn bộ tài liệu</option>
+                                <option value="custom">Tùy chọn trang quét</option>
+                            </select>
+                        </div>
+                        <div class="pdf-scan-mode-row hidden" id="pdf-custom-pages-row" style="margin-top: 0.5rem;">
+                            <label for="pdf-custom-pages" class="pdf-mode-label">Nhập số trang:</label>
+                            <input type="text" id="pdf-custom-pages" class="pdf-mode-input" placeholder="Ví dụ: 1, 3, 5-8" style="width: 160px;">
+                        </div>
+                        <div class="pdf-page-controls" id="pdf-page-controls-container">
+                            <button type="button" class="btn-page-nav" id="btn-prev-page" title="Trang trước" disabled>
+                                <i class="fa-solid fa-chevron-left"></i>
+                            </button>
+                            <div class="pdf-page-indicator">
+                                Trang <input type="number" id="pdf-page-input" value="1" min="1" max="1"> / <span
+                                    id="pdf-total-pages">1</span>
+                            </div>
+                            <button type="button" class="btn-page-nav" id="btn-next-page" title="Trang sau" disabled>
+                                <i class="fa-solid fa-chevron-right"></i>
+                            </button>
+                        </div>
+                        <p class="pdf-help-text" id="pdf-page-help-text">Di chuyển qua lại hoặc nhập số trang để chọn trang
+                            muốn nhận dạng chữ.</p>
                     </div>
-                    <p class="pdf-help-text" id="pdf-page-help-text">Di chuyển qua lại hoặc nhập số trang để chọn trang
-                        muốn nhận dạng chữ.</p>
-                </div>
-                
-                <!-- Bố cục tài liệu (Hiện khi có file được tải lên) -->
-                <div class="pdf-options-container hidden" id="layout-options-container" style="margin-top: 15px;">
-                    <div class="pdf-options-title">
-                        <i class="fa-solid fa-table-columns"></i>
-                        <span>Bố cục & Cấu trúc văn bản</span>
-                    </div>
-                    <div class="pdf-scan-mode-row">
-                        <label for="layout-mode" class="pdf-mode-label">Kiểu tài liệu:</label>
-                        <select id="layout-mode" class="pdf-mode-select">
-                            <option value="auto" selected>Tự động phân tích cột (Auto)</option>
-                            <option value="single">Văn bản thông thường (1 cột)</option>
-                            <option value="double">Tài liệu khoa học / Journals (2 cột)</option>
-                            <option value="no-split">Không phân tách (Giữ nguyên dòng ngang)</option>
-                        </select>
+                    
+                    <!-- Bố cục tài liệu (Hiện khi có file được tải lên) -->
+                    <div class="pdf-options-container hidden" id="layout-options-container" style="margin-top: 15px;">
+                        <div class="pdf-options-title">
+                            <i class="fa-solid fa-table-columns"></i>
+                            <span>Bố cục & Cấu trúc văn bản</span>
+                        </div>
+                        <div class="pdf-scan-mode-row">
+                            <label for="layout-mode" class="pdf-mode-label">Kiểu tài liệu:</label>
+                            <select id="layout-mode" class="pdf-mode-select">
+                                <option value="auto" selected>Tự động phân tích cột (Auto)</option>
+                                <option value="single">Văn bản thông thường (1 cột)</option>
+                                <option value="double">Tài liệu khoa học / Journals (2 cột)</option>
+                                <option value="no-split">Không phân tách (Giữ nguyên dòng ngang)</option>
+                            </select>
+                        </div>
                     </div>
                 </div>
 
