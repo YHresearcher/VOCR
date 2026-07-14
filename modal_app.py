@@ -648,17 +648,37 @@ def fastapi_app():
                     
                 for page_idx in selected_pages:
                     page = doc.load_page(page_idx)
-                    pix = page.get_pixmap(dpi=150)
-                    img_data = pix.tobytes("png")
-                    np_arr = np.frombuffer(img_data, np.uint8)
-                    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                     
-                    if img is None:
-                        continue
+                    # Cố gắng trích xuất văn bản số (digital text) trực tiếp
+                    blocks = page.get_text("blocks")
+                    page_lines = []
                     
-                    page_lines = _ocr_with_preprocessing(ocr, img)
+                    for b in blocks:
+                        b_text = b[4].strip()
+                        if b_text:
+                            for line in b_text.split('\n'):
+                                line_clean = line.strip()
+                                if line_clean:
+                                    line_clean = apply_herbal_corrections(line_clean)
+                                    page_lines.append({
+                                        "text": line_clean,
+                                        "confidence": 1.0,  # Độ tự tin tuyệt đối cho text gốc
+                                        "page": page_idx + 1
+                                    })
+                    
+                    # Nếu không tìm thấy chữ số (PDF scan), fallback về ảnh + OCR
+                    if not page_lines:
+                        pix = page.get_pixmap(dpi=150)
+                        img_data = pix.tobytes("png")
+                        np_arr = np.frombuffer(img_data, np.uint8)
+                        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                        
+                        if img is not None:
+                            page_lines = _ocr_with_preprocessing(ocr, img)
+                            for line in page_lines:
+                                line["page"] = page_idx + 1
+                                
                     for line in page_lines:
-                        line["page"] = page_idx + 1
                         all_lines.append(line)
                         box_count += 1
             else:
@@ -671,10 +691,13 @@ def fastapi_app():
                 box_count = len(all_lines)
             
             raw_text = "\n".join([l["text"] for l in all_lines])
+            
+            is_all_native = all([l.get("confidence", 0.0) == 1.0 for l in all_lines])
+            response_model_type = "native-pdf" if (is_pdf and is_all_native) else model_type_global
                         
             return {
                 "status": "success",
-                "model_type": model_type_global,
+                "model_type": response_model_type,
                 "text": raw_text,
                 "full_text": raw_text,
                 "lines": all_lines,
