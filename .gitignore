@@ -1,40 +1,35 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
-.ipynb_checkpoints/
 *.py[cod]
-*$py.class
-
-# C extensions
-*.so
-
-/inference/
-/inference_results/
-/output/
-/train_data/
-/log/
-
-*.DS_Store
-*.vs
-*.user
-*~
-*.vscode
-*.idea
-
-*.log
-.clang-format
-.clang_format.hook
-
-build/
-dist/
 *.egg-info/
-
-/deploy/android_demo/app/OpenCV/
-/deploy/android_demo/app/PaddleLite/
-/deploy/android_demo/app/.cxx/
-/deploy/android_demo/app/cache/
-
-test_tipc/web/models/
-test_tipc/web/node_modules/
-
+dist/
+build/
+*.egg
 .venv/
-.worktrees/
+venv/
+env/
+
+# Modal
+.modal/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data & Models
+*.pdparams
+*.pdopt
+*.inference
+*.jpg
+*.png
+*.bmp
+*.pdf
+
+# Graphify
+graphify-out/

@@ -1,7 +1,7 @@
 import os
 import modal
 
-app = modal.App("viet-ocr-server")
+app = modal.App("vietocr-service-fastapi-app")
 
 # Xây dựng môi trường container trên Modal.com
 # Định nghĩa môi trường chạy: Cài đặt PaddleOCR, CUDA, các gói dependencies 
@@ -13,18 +13,19 @@ ocr_image = (
     .env({
         "LD_LIBRARY_PATH": "/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
     })
-    .pip_install(
-        "numpy==1.26.4", # Bắt buộc cài đặt NumPy 1.x để tương thích với Paddle 2.6
-        "paddlepaddle-gpu==2.6.0", # Cài đặt Paddle tương thích với T4/CUDA 11.8
-        "imaug",
-        "fastapi[standard]", # Bắt buộc cho các hàm fastapi_endpoint trong các bản Modal mới
-        "gdown" # Sử dụng để tải tệp lớn từ Google Drive một cách tin cậy
-    )
-    .pip_install_from_requirements("requirements.txt")
-    .pip_install("paddleocr>=2.8.0")
+    .pip_install("numpy==1.26.4") # NumPy 1.x cho tương thích tốt
+    .run_commands("pip install paddlepaddle-gpu==2.6.2 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/")
+    .pip_install("imgaug")
+    .pip_install("fastapi[standard]") # Bắt buộc cho các hàm fastapi_endpoint trong các bản Modal mới
+    .pip_install("gdown") # Sử dụng để tải tệp lớn từ Google Drive một cách tin cậy
+    .pip_install("pymupdf") # Thư viện xử lý PDF trực tiếp trên backend
+    .pip_install_from_requirements("requirements.txt")  # installs paddleocr==2.9.1
+    # paddleocr 2.9.1 compatible with paddlepaddle-gpu 2.6.2
+    .pip_install("transformers", "torch", "sentencepiece") # HuggingFace correction model
     .add_local_dir(
         ".",
         remote_path="/root",
+        copy=True,
         ignore=[
             ".git", 
             "train_data", 
@@ -34,8 +35,22 @@ ocr_image = (
             ".idea", 
             ".gemini", 
             "artifacts", 
+            "paddleocr",
             "**/*.pyc"
         ]
+    )
+    # Tải mã nguồn PaddleOCR 3.0 (tools/, configs/, ppocr/) cho training/export
+    # vì framework đã bị xóa khỏi repo local để giữ repo sạch
+    .run_commands(
+        "git clone --depth 1 --branch release/3.0 https://github.com/PaddlePaddle/PaddleOCR.git /tmp/poco-src "
+        "&& cp -r /tmp/poco-src/tools /root/tools "
+        "&& cp -r /tmp/poco-src/configs /root/configs "
+        "&& cp -r /tmp/poco-src/ppocr /root/ppocr "
+        "&& rm -rf /tmp/poco-src"
+    )
+    # Ghi đè các file patch tùy chỉnh của chúng ta (NRTR head, custom dict, custom collate fn)
+    .run_commands(
+        "cp -r /root/custom_src/* /root/"
     )
 )
 
@@ -51,6 +66,7 @@ vol = modal.Volume.from_name("viet-ocr-vol", create_if_missing=True)
 )
 def run_train(test_run: bool = False):
     import subprocess
+    import os
     print("Bắt đầu khởi chạy Job huấn luyện tiếng Việt (PP-OCRv5-server)...")
     
     # Reload volume để đồng bộ dữ liệu mới nhất
@@ -66,12 +82,39 @@ def run_train(test_run: bool = False):
     cmd = [
         "python", "tools/train.py",
         "-c", "configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml",
-        "-o", "Global.save_model_dir=/vol/output/vi_PP-OCRv5_server_rec",
+        "-o", "Global.pretrained_model=/vol/pretrain_models/PP-OCRv5_server_rec_pretrained",
+        "Global.save_model_dir=/vol/output/vi_PP-OCRv5_server_rec",
+        "Global.character_dict_path=ppocr/utils/dict/vi_custom_dict.txt",  # Sử dụng từ điển tiếng Việt chuẩn
         "Train.dataset.data_dir=/vol/train_data/",
         "Train.dataset.label_file_list=[/vol/train_data/train_list.txt]",
         "Eval.dataset.data_dir=/vol/train_data/",
         "Eval.dataset.label_file_list=[/vol/train_data/val_list.txt]"
     ]
+    
+    # Kiểm tra xem checkpoint cũ có bị lệch từ điển không (nếu có, cần dọn dẹp để tránh lỗi lệch shape phân loại)
+    old_output_dir = "/vol/output/vi_PP-OCRv5_server_rec"
+    config_old = os.path.join(old_output_dir, "config.yml")
+    if os.path.exists(config_old):
+        try:
+            with open(config_old, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+                if "ppocrv5_dict.txt" in content or "vi_dict.txt" in content:
+                    print("Phát hiện checkpoint cũ sử dụng từ điển cũ. Đang tự động dọn dẹp để train lại với vi_custom_dict.txt...")
+                    import shutil
+                    shutil.rmtree(old_output_dir, ignore_errors=True)
+                    os.makedirs(old_output_dir, exist_ok=True)
+                    # Commit volume để cập nhật việc xóa file
+                    vol.commit()
+        except Exception as e:
+            print(f"Lỗi kiểm tra cấu hình cũ: {e}")
+
+    # Tự động Resume nếu tìm thấy checkpoint cũ từ Epoch trước đó
+    latest_checkpoint = "/vol/output/vi_PP-OCRv5_server_rec/latest.pdparams"
+    if os.path.exists(latest_checkpoint):
+        print(f"Tìm thấy checkpoint cũ tại {latest_checkpoint}. Tự động Resume...")
+        # Loại bỏ đuôi .pdparams khi truyền vào Global.checkpoints của PaddleOCR
+        checkpoint_prefix = "/vol/output/vi_PP-OCRv5_server_rec/latest"
+        cmd.append(f"Global.checkpoints={checkpoint_prefix}")
     
     if test_run:
         print("Đang chạy chế độ kiểm thử (test_run=True): Giới hạn 1 epoch và giảm workers...")
@@ -91,6 +134,7 @@ def run_train(test_run: bool = False):
     except subprocess.CalledProcessError as e:
         print(f"Lỗi trong quá trình huấn luyện: {e}")
 
+
 # 2. Hàm Export Model: Đổi từ checkpoint (.pdparams) sang mô hình suy luận (Inference Model)
 @app.function(
     image=ocr_image,
@@ -98,6 +142,7 @@ def run_train(test_run: bool = False):
 )
 def run_export():
     import subprocess
+    import os
     print("Bắt đầu export model sang định dạng inference...")
     
     # Reload volume để lấy checkpoint mới nhất
@@ -114,7 +159,9 @@ def run_export():
         "python", "tools/export_model.py",
         "-c", "configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml",
         "-o", f"Global.pretrained_model={best_model_path}",
-        "Global.save_inference_dir=/vol/inference/vi_PP-OCRv5_server_rec"
+        "Global.save_inference_dir=/vol/inference/vi_PP-OCRv5_server_rec",
+        "Global.character_dict_path=ppocr/utils/dict/vi_custom_dict.txt",
+        "Global.export_with_pir=False"
     ]
     try:
         subprocess.run(cmd, check=True)
@@ -125,6 +172,120 @@ def run_export():
         print("Commit export hoàn tất.", flush=True)
     except subprocess.CalledProcessError as e:
         print(f"Lỗi trong quá trình export model: {e}")
+
+
+# ==========================================
+# Vietnamese Text Correction Layer (Tier 1)
+# Uses HuggingFace model to fix OCR errors in Vietnamese text
+# ==========================================
+
+class VietnameseCorrector:
+    """Post-processing correction for Vietnamese OCR output using HuggingFace transformer model."""
+    
+    def __init__(self):
+        self.model = None
+        self.tokenizer = None
+        self.ready = False
+    
+    def load(self):
+        """Load the Vietnamese correction model from HuggingFace."""
+        try:
+            from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+            import torch
+            
+            model_name = "MinhDucNguyen9705/vietnamese-correction-2.0-ocr"
+            print(f"Đang tải mô hình sửa lỗi tiếng Việt từ {model_name}...")
+            
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+            
+            # Move to GPU if available
+            if torch.cuda.is_available():
+                self.model = self.model.cuda()
+                print("Correction model loaded on GPU.")
+            else:
+                print("Correction model loaded on CPU.")
+            
+            self.model.eval()
+            self.ready = True
+            print("Mô hình sửa lỗi tiếng Việt đã sẵn sàng.")
+        except Exception as e:
+            print(f"CẢNH BÁO: Không thể tải mô hình sửa lỗi: {e}")
+            self.ready = False
+    
+    def correct(self, text: str) -> str:
+        """Correct Vietnamese OCR text. Returns original text if model unavailable."""
+        if not self.ready or not text or not text.strip():
+            return text
+        
+        import torch
+        
+        try:
+            # Process text line by line to avoid truncation
+            lines = text.split('\n')
+            corrected_lines = []
+            
+            for line in lines:
+                if not line.strip():
+                    corrected_lines.append(line)
+                    continue
+                
+                inputs = self.tokenizer(
+                    line, 
+                    return_tensors="pt", 
+                    max_length=512, 
+                    truncation=True, 
+                    padding=True
+                )
+                
+                # Move to same device as model
+                if torch.cuda.is_available():
+                    inputs = {k: v.cuda() for k, v in inputs.items()}
+                
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        **inputs,
+                        max_length=512,
+                        num_beams=4,
+                        early_stopping=True
+                    )
+                
+                corrected = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+                corrected_lines.append(corrected)
+            
+            return '\n'.join(corrected_lines)
+        except Exception as e:
+            print(f"Lỗi khi sửa text: {e}")
+            return text  # Fallback to original text
+
+# Singleton instance for sharing across functions
+corrector = VietnameseCorrector()
+
+# ==========================================
+# Herbal/Medical Dictionary Correction
+# ==========================================
+HERBAL_CORRECTIONS = {
+    "chüa": "chữa", "bönh": "bệnh", "bénh": "bệnh",
+    "huyét": "huyết", "huyêt": "huyết",
+    "Tiéu chay": "Tiêu chảy", "tieu chay": "tiêu chảy",
+    "Nuóc": "Nước", "nuöc": "nước", "nuóc": "nước",
+    "Sat trung": "Sát trùng", "Sát tring": "Sát trùng",
+    "Sat trüng": "Sát trùng",
+    "L miêng": "Lở miệng", "L ming": "Lở miệng",
+    "Kit ly": "Kiết lỵ", 
+    "phat st": "phát sốt", "Cam mao": "Cảm mạo",
+    "thao dudng": "tháo đường", "Dái thao": "Đái tháo",
+    "tuoi": "tươi", "nhuyén": "nhuyễn",
+    "bt nháo": "bột nhão", "kh nau": "khô nấu",
+    "gia nat": "giã nát", "nhiu lan": "nhiều lần",
+    "vc ": "vốc "
+}
+
+def apply_herbal_corrections(text: str) -> str:
+    for wrong, correct in HERBAL_CORRECTIONS.items():
+        text = text.replace(wrong, correct)
+    return text
+
 
 # 3. OCR Service: Class-based để giữ model trong bộ nhớ GPU giữa các request
 @app.cls(
@@ -137,36 +298,116 @@ class OCRService:
     def __init__(self):
         self.ocr = None
         self.model_type = None
+        self.corrector = VietnameseCorrector()
     
     @modal.enter()
     def load_model(self):
-        """Khởi tạo PaddleOCR một lần duy nhất khi container start, thay vì mỗi request."""
+        """Khởi tạo PaddleOCR + Correction model một lần duy nhất khi container start."""
         from paddleocr import PaddleOCR
         
-        custom_model_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+        custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+        custom_det_dir = "/vol/inference/vi_PP-OCRv5_server_det"
         
         # Reload volume để nhận mô hình mới nhất
         vol.reload()
         
-        if os.path.exists(custom_model_dir) and os.listdir(custom_model_dir):
-            print(f"Đang tải mô hình fine-tuned tại: {custom_model_dir}")
-            self.ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang="vi",
-                use_gpu=True,
-                rec_model_dir=custom_model_dir,
-                rec_char_dict_path="./ppocr/utils/dict/vi_custom_dict.txt"
-            )
+        # PaddleOCR 2.9.1 API: truyền rec_model_dir để load fine-tuned model
+        ocr_kwargs = dict(use_angle_cls=True, lang="vi", use_gpu=True, show_log=False)
+        
+        if os.path.exists(custom_rec_dir) and os.listdir(custom_rec_dir):
+            print(f"Đang tải mô hình rec fine-tuned tại: {custom_rec_dir}")
+            ocr_kwargs["rec_model_dir"] = custom_rec_dir
+            ocr_kwargs["rec_char_dict_path"] = "/root/ppocr/utils/dict/vi_custom_dict.txt"  # POINT TO CUSTOM DICT!
             self.model_type = "fine-tuned"
         else:
             print("Không tìm thấy mô hình fine-tuned. Sử dụng mô hình tiếng Việt mặc định...")
-            self.ocr = PaddleOCR(
-                use_angle_cls=True,
-                lang="vi",
-                use_gpu=True
-            )
             self.model_type = "default"
-        print(f"OCR model đã sẵn sàng (type: {self.model_type})")
+        
+        # Nếu có det model fine-tuned
+        if os.path.exists(custom_det_dir) and os.listdir(custom_det_dir):
+            print(f"Đang tải mô hình det fine-tuned tại: {custom_det_dir}")
+            ocr_kwargs["det_model_dir"] = custom_det_dir
+        
+        self.ocr = PaddleOCR(**ocr_kwargs)
+        
+        # Bỏ Vietnamese corrector - model T5 đang làm worse cho ảnh y học/thảo dược
+        # (correction model được train trên văn bản chung, không phù hợp cho domain chuyên ngành)
+        # self.corrector.load()
+        self.corrector.ready = False
+        
+        print(f"OCR model đã sẵn sàng (type: {self.model_type}, correction: {self.corrector.ready})")
+    
+    def _split_columns(self, img):
+        """Phát hiện layout 2 cột bằng vertical projection profile."""
+        import cv2
+        import numpy as np
+        h, w = img.shape[:2]
+        if w < 300:
+            return [img]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        col_sum = np.sum(binary, axis=0)
+        start_w = int(w * 0.3)
+        end_w = int(w * 0.7)
+        mid_col_sum = col_sum[start_w:end_w]
+        threshold = np.max(col_sum) * 0.02
+        gap_cols = np.where(mid_col_sum <= threshold)[0] + start_w
+        if len(gap_cols) > 0:
+            max_gap_start, max_gap_len, current_start, current_len = -1, 0, gap_cols[0], 1
+            for i in range(1, len(gap_cols)):
+                if gap_cols[i] == gap_cols[i-1] + 1:
+                    current_len += 1
+                else:
+                    if current_len > max_gap_len:
+                        max_gap_len, max_gap_start = current_len, current_start
+                    current_start, current_len = gap_cols[i], 1
+            if current_len > max_gap_len:
+                max_gap_len, max_gap_start = current_len, current_start
+            if max_gap_len >= 15:
+                split_point = max_gap_start + max_gap_len // 2
+                return [img[:, :split_point], img[:, split_point:]]
+        return [img]
+
+    def _preprocess_image(self, img):
+        """Tiền xử lý ảnh để cải thiện chất lượng OCR, đặc biệt cho ảnh y học/thảo dược."""
+        import cv2
+        import numpy as np
+        
+        h, w = img.shape[:2]
+        
+        # 1. Upscale ảnh nhỏ (tăng lên 1200px)
+        min_dim = min(h, w)
+        if min_dim < 1200:
+            scale = 1200.0 / min_dim
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        
+        # 2. Chuyển sang grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # 3. Denoise
+        denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+        
+        # 4. Tăng contrast bằng CLAHE
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(denoised)
+        
+        # 5. Binarization (Adaptive threshold thay cho Otsu)
+        binary = cv2.adaptiveThreshold(
+            enhanced, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            blockSize=15,
+            C=8
+        )
+        
+        # 6. Morphological opening để loại bỏ noise nhỏ (kernel nhỏ)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+        cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        
+        # 7. Convert lại thành 3-channel vì PaddleOCR expects BGR
+        result = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+        
+        return result
     
     @modal.fastapi_endpoint(method="POST")
     def ocr_webhook(self, item: dict):
@@ -187,19 +428,30 @@ class OCRService:
             
             if img is None:
                 return {"error": "Failed to decode image from base64"}
-                
-            result = self.ocr.ocr(img, cls=True)
             
+            # Phát hiện và cắt cột nếu có
+            img_parts = self._split_columns(img)
             extracted_text = []
-            if result and result[0]:
-                for line in result[0]:
-                    extracted_text.append(line[1][0])
+            
+            for part in img_parts:
+                # Preprocess ảnh để cải thiện OCR quality
+                preprocessed = self._preprocess_image(part)
+                result = self.ocr.ocr(preprocessed, cls=True)
+                
+                if result and result[0]:
+                    for line in result[0]:
+                        text = apply_herbal_corrections(line[1][0])
+                        conf = line[1][1]
+                        extracted_text.append({"text": text, "confidence": round(conf, 4)})
+            
+            raw_text = "\n".join([t["text"] for t in extracted_text])
                     
             return {
                 "status": "success",
                 "model_type": self.model_type,
-                "text": "\n".join(extracted_text),
-                "raw_result": result
+                "text": raw_text,
+                "lines": extracted_text,
+                "lines_count": len(extracted_text)
             }
         except Exception as e:
             return {"error": str(e)}
@@ -217,6 +469,230 @@ class OCRService:
             "model_type": self.model_type,
             "model_loaded": self.ocr is not None
         }
+
+
+# ==========================================
+# FastAPI Web Application for direct PDF/Image OCR
+# ==========================================
+
+# Global variables for model sharing inside the container
+ocr_model = None
+model_type_global = "default"
+
+@app.function(
+    image=ocr_image,
+    gpu="T4",
+    volumes={"/vol": vol},
+    scaledown_window=300
+)
+@modal.asgi_app()
+def fastapi_app():
+    from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+    from fastapi.middleware.cors import CORSMiddleware
+    from contextlib import asynccontextmanager
+    import numpy as np
+    import cv2
+    import fitz  # PyMuPDF
+    
+    def _split_columns(img):
+        h, w = img.shape[:2]
+        if w < 300:
+            return [img]
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        col_sum = np.sum(binary, axis=0)
+        start_w = int(w * 0.3)
+        end_w = int(w * 0.7)
+        mid_col_sum = col_sum[start_w:end_w]
+        threshold = np.max(col_sum) * 0.02
+        gap_cols = np.where(mid_col_sum <= threshold)[0] + start_w
+        if len(gap_cols) > 0:
+            max_gap_start, max_gap_len, current_start, current_len = -1, 0, gap_cols[0], 1
+            for i in range(1, len(gap_cols)):
+                if gap_cols[i] == gap_cols[i-1] + 1:
+                    current_len += 1
+                else:
+                    if current_len > max_gap_len:
+                        max_gap_len, max_gap_start = current_len, current_start
+                    current_start, current_len = gap_cols[i], 1
+            if current_len > max_gap_len:
+                max_gap_len, max_gap_start = current_len, current_start
+            if max_gap_len >= 15:
+                split_point = max_gap_start + max_gap_len // 2
+                return [img[:, :split_point], img[:, split_point:]]
+        return [img]
+
+    def _preprocess_image(img):
+        """Tiền xử lý ảnh để cải thiện chất lượng OCR, đặc biệt cho ảnh y học/thảo dược."""
+        h, w = img.shape[:2]
+        min_dim = min(h, w)
+        if min_dim < 1200:
+            scale = 1200.0 / min_dim
+            img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(denoised)
+        binary = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, blockSize=15, C=8)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+        cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+        return cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Load PaddleOCR model on startup."""
+        global ocr_model, model_type_global
+        from paddleocr import PaddleOCR
+        import os as _os
+        try:
+            vol.reload()
+            ocr_kwargs = dict(use_angle_cls=True, lang="vi", use_gpu=True, show_log=False)
+            custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+            custom_det_dir = "/vol/inference/vi_PP-OCRv5_server_det"
+            if _os.path.exists(custom_rec_dir) and _os.listdir(custom_rec_dir):
+                print(f"Đang tải mô hình rec fine-tuned tại: {custom_rec_dir}")
+                ocr_kwargs["rec_model_dir"] = custom_rec_dir
+                ocr_kwargs["rec_char_dict_path"] = "/root/ppocr/utils/dict/vi_custom_dict.txt"  # POINT TO CUSTOM DICT!
+                model_type_global = "fine-tuned"
+            else:
+                print("Sử dụng mô hình tiếng Việt mặc định...")
+                model_type_global = "default"
+            if _os.path.exists(custom_det_dir) and _os.listdir(custom_det_dir):
+                ocr_kwargs["det_model_dir"] = custom_det_dir
+            ocr_model = PaddleOCR(**ocr_kwargs)
+            print(f"FastAPI OCR model loaded (type: {model_type_global})")
+        except Exception as e:
+            print(f"Lỗi khi load model: {e}")
+            model_type_global = "error"
+        yield
+
+    web_app = FastAPI(title="VietOCR Service API", lifespan=lifespan)
+    web_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    def get_ocr_model():
+        global ocr_model, model_type_global
+        if ocr_model is None:
+            from paddleocr import PaddleOCR
+            custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
+            custom_det_dir = "/vol/inference/vi_PP-OCRv5_server_det"
+            vol.reload()
+            ocr_kwargs = dict(use_angle_cls=True, lang="vi", use_gpu=True, show_log=False)
+            if os.path.exists(custom_rec_dir) and os.listdir(custom_rec_dir):
+                print(f"Loading fine-tuned rec model from: {custom_rec_dir}")
+                ocr_kwargs["rec_model_dir"] = custom_rec_dir
+                ocr_kwargs["rec_char_dict_path"] = "/root/ppocr/utils/dict/vi_custom_dict.txt"  # POINT TO CUSTOM DICT!
+                model_type_global = "fine-tuned"
+            else:
+                print("Loading default Vietnamese model...")
+                model_type_global = "default"
+            if os.path.exists(custom_det_dir) and os.listdir(custom_det_dir):
+                ocr_kwargs["det_model_dir"] = custom_det_dir
+            ocr_model = PaddleOCR(**ocr_kwargs)
+        return ocr_model
+
+    def _ocr_with_preprocessing(ocr, img):
+        """Run OCR with column splitting and image preprocessing, return lines with confidence."""
+        img_parts = _split_columns(img)
+        lines = []
+        for part in img_parts:
+            preprocessed = _preprocess_image(part)
+            result = ocr.ocr(preprocessed, cls=True)
+            if result and result[0]:
+                for line in result[0]:
+                    text = apply_herbal_corrections(line[1][0])
+                    conf = line[1][1]
+                    lines.append({"text": text, "confidence": round(conf, 4)})
+        return lines
+
+    @web_app.post("/ocr")
+    async def ocr_endpoint(file: UploadFile = File(...), pages: str = Form(None)):
+        ocr = get_ocr_model()
+        content = await file.read()
+        
+        is_pdf = file.filename.lower().endswith('.pdf') or file.content_type == 'application/pdf'
+        
+        all_lines = []
+        box_count = 0
+        
+        try:
+            if is_pdf:
+                doc = fitz.open(stream=content, filetype="pdf")
+                num_pages = len(doc)
+                
+                selected_pages = []
+                if pages and pages.strip():
+                    for part in pages.split(","):
+                        part = part.strip()
+                        if "-" in part:
+                            try:
+                                start, end = part.split("-")
+                                selected_pages.extend(range(int(start), int(end) + 1))
+                            except ValueError:
+                                pass
+                        else:
+                            try:
+                                selected_pages.append(int(part))
+                            except ValueError:
+                                pass
+                    selected_pages = [p - 1 for p in selected_pages if 0 <= p - 1 < num_pages]
+                
+                if not selected_pages:
+                    selected_pages = list(range(num_pages))
+                    
+                for page_idx in selected_pages:
+                    page = doc.load_page(page_idx)
+                    pix = page.get_pixmap(dpi=150)
+                    img_data = pix.tobytes("png")
+                    np_arr = np.frombuffer(img_data, np.uint8)
+                    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                    
+                    if img is None:
+                        continue
+                    
+                    page_lines = _ocr_with_preprocessing(ocr, img)
+                    for line in page_lines:
+                        line["page"] = page_idx + 1
+                        all_lines.append(line)
+                        box_count += 1
+            else:
+                np_arr = np.frombuffer(content, np.uint8)
+                img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                if img is None:
+                    raise HTTPException(status_code=400, detail="Invalid image format")
+                    
+                all_lines = _ocr_with_preprocessing(ocr, img)
+                box_count = len(all_lines)
+            
+            raw_text = "\n".join([l["text"] for l in all_lines])
+                        
+            return {
+                "status": "success",
+                "model_type": model_type_global,
+                "text": raw_text,
+                "full_text": raw_text,
+                "lines": all_lines,
+                "lines_count": box_count,
+                "box_count": box_count
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @web_app.get("/")
+    async def health_endpoint():
+        return {
+            "status": "running",
+            "model_type": "ready",
+            "model_loaded": True
+        }
+
+    return web_app
+
 
 # 4. Hàm Kiểm tra Môi trường (Diagnostics)
 @app.function(
@@ -275,6 +751,7 @@ def test_env():
     else:
         print("Tất cả ký tự trong nhãn đều tồn tại trong từ điển!")
 
+
 # 5. Hàm tự động tải và chuẩn bị dữ liệu (VinText & Pretrained Weights)
 @app.function(
     image=ocr_image,
@@ -297,9 +774,9 @@ def prepare_dataset():
     os.makedirs("/vol/train_data", exist_ok=True)
     
     # 2. Tải pre-trained weights
-    pretrained_dest = "/vol/pretrain_models/latin_PP-OCRv5_mobile_rec_pretrained.pdparams"
+    pretrained_dest = "/vol/pretrain_models/PP-OCRv5_server_rec_pretrained.pdparams"
     if not os.path.exists(pretrained_dest):
-        pretrained_url = "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_pretrained_model/latin_PP-OCRv5_mobile_rec_pretrained.pdparams"
+        pretrained_url = "https://paddle-model-ecology.bj.bcebos.com/paddlex/official_pretrained_model/PP-OCRv5_server_rec_pretrained.pdparams"
         print(f"Đang tải pre-trained weights từ {pretrained_url}...")
         try:
             r = requests.get(pretrained_url, stream=True)

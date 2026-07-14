@@ -16,3 +16,7 @@ albumentations
 # to be compatible with albumentations
 albucore
 packaging
+transformers
+torch
+sentencepiece
+paddleocr==2.9.1
