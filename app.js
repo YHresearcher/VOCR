@@ -213,6 +213,7 @@ function validateAndSetFile(file) {
                 elements.pdfPageInput.value = 1;
 
                 elements.pdfOptionsContainer.classList.remove('hidden');
+                document.getElementById('layout-options-container').classList.remove('hidden');
                 elements.btnProcess.removeAttribute('disabled');
 
                 renderPage(pdfPageNum);
@@ -236,6 +237,7 @@ function validateAndSetFile(file) {
             elements.imageElement.src = e.target.result;
             elements.dropzoneDefault.classList.add('hidden');
             elements.dropzonePreview.classList.remove('hidden');
+            document.getElementById('layout-options-container').classList.remove('hidden');
             elements.btnProcess.removeAttribute('disabled');
             showToast(`Đã tải ảnh: ${file.name}`, 'success');
         };
@@ -258,6 +260,8 @@ function resetUpload() {
     elements.pdfScanMode.disabled = false;
     elements.pdfPageInput.disabled = false;
     elements.pdfOptionsContainer.classList.add('hidden');
+    document.getElementById('layout-options-container').classList.add('hidden');
+    document.getElementById('layout-mode').value = 'auto';
     elements.pdfPreviewCanvas.classList.add('hidden');
     elements.imageElement.classList.remove('hidden');
 
@@ -307,6 +311,9 @@ async function processOcr() {
 
     try {
         formData.append('file', currentFile, currentFile.name);
+        
+        const layoutMode = document.getElementById('layout-mode').value;
+        formData.append('layout_mode', layoutMode);
 
         if (pdfDoc) {
             const scanMode = elements.pdfScanMode.value;

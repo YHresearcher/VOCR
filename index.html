@@ -91,6 +91,23 @@
                     <p class="pdf-help-text" id="pdf-page-help-text">Di chuyển qua lại hoặc nhập số trang để chọn trang
                         muốn nhận dạng chữ.</p>
                 </div>
+                
+                <!-- Bố cục tài liệu (Hiện khi có file được tải lên) -->
+                <div class="pdf-options-container hidden" id="layout-options-container" style="margin-top: 15px;">
+                    <div class="pdf-options-title">
+                        <i class="fa-solid fa-table-columns"></i>
+                        <span>Bố cục & Cấu trúc văn bản</span>
+                    </div>
+                    <div class="pdf-scan-mode-row">
+                        <label for="layout-mode" class="pdf-mode-label">Kiểu tài liệu:</label>
+                        <select id="layout-mode" class="pdf-mode-select">
+                            <option value="auto" selected>Tự động phân tích cột (Auto)</option>
+                            <option value="single">Văn bản thông thường (1 cột)</option>
+                            <option value="double">Tài liệu khoa học / Journals (2 cột)</option>
+                            <option value="no-split">Không phân tách (Giữ nguyên dòng ngang)</option>
+                        </select>
+                    </div>
+                </div>
 
                 <div class="action-bar">
                     <button type="button" class="btn btn-primary" id="btn-process" disabled>

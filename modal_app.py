@@ -495,10 +495,63 @@ def fastapi_app():
     import cv2
     import fitz  # PyMuPDF
     
-    def _split_columns(img):
+    def _sort_blocks(blocks, layout_mode="auto", page_width=595.0):
+        """Sắp xếp các block text của PDF dựa theo chế độ bố cục."""
+        if not blocks:
+            return []
+            
+        valid_blocks = []
+        for b in blocks:
+            b_text = b[4].strip()
+            if b_text:
+                valid_blocks.append(b)
+                
+        if layout_mode == "single" or layout_mode == "no-split":
+            return sorted(valid_blocks, key=lambda x: x[1])  # Sắp xếp theo y0 (trên xuống dưới)
+            
+        elif layout_mode == "double":
+            mid_x = page_width / 2
+            left_col = []
+            right_col = []
+            full_width = []
+            
+            for b in valid_blocks:
+                bx0, by0, bx1, by1 = b[0], b[1], b[2], b[3]
+                if bx1 <= mid_x + 15:
+                    left_col.append(b)
+                elif bx0 >= mid_x - 15:
+                    right_col.append(b)
+                else:
+                    full_width.append(b)
+            
+            left_sorted = sorted(left_col, key=lambda x: x[1])
+            right_sorted = sorted(right_col, key=lambda x: x[1])
+            
+            min_col_y = min([b[1] for b in (left_sorted + right_sorted)]) if (left_sorted + right_sorted) else 0
+            top_blocks = [b for b in full_width if b[1] < min_col_y]
+            bottom_blocks = [b for b in full_width if b[1] >= min_col_y]
+            
+            all_sorted = []
+            all_sorted.extend(sorted(top_blocks, key=lambda x: x[1]))
+            all_sorted.extend(left_sorted)
+            all_sorted.extend(right_sorted)
+            all_sorted.extend(sorted(bottom_blocks, key=lambda x: x[1]))
+            return all_sorted
+            
+        else:  # layout_mode == "auto":
+            return sorted(valid_blocks, key=lambda x: x[5])  # Sắp xếp theo block_no mặc định của PDF
+
+    def _split_columns(img, layout_mode="auto"):
+        if layout_mode == "single" or layout_mode == "no-split":
+            return [img]
         h, w = img.shape[:2]
         if w < 300:
             return [img]
+        if layout_mode == "double":
+            split_point = w // 2
+            return [img[:, :split_point], img[:, split_point:]]
+            
+        # layout_mode == "auto":
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         col_sum = np.sum(binary, axis=0)
@@ -597,9 +650,9 @@ def fastapi_app():
             ocr_model = PaddleOCR(**ocr_kwargs)
         return ocr_model
 
-    def _ocr_with_preprocessing(ocr, img):
+    def _ocr_with_preprocessing(ocr, img, layout_mode="auto"):
         """Run OCR with column splitting and image preprocessing, return lines with confidence."""
-        img_parts = _split_columns(img)
+        img_parts = _split_columns(img, layout_mode)
         lines = []
         for part in img_parts:
             preprocessed = _preprocess_image(part)
@@ -612,7 +665,7 @@ def fastapi_app():
         return lines
 
     @web_app.post("/ocr")
-    async def ocr_endpoint(file: UploadFile = File(...), pages: str = Form(None)):
+    async def ocr_endpoint(file: UploadFile = File(...), pages: str = Form(None), layout_mode: str = Form("auto")):
         ocr = get_ocr_model()
         content = await file.read()
         
@@ -648,12 +701,14 @@ def fastapi_app():
                     
                 for page_idx in selected_pages:
                     page = doc.load_page(page_idx)
+                    page_width = page.rect.width
                     
                     # Cố gắng trích xuất văn bản số (digital text) trực tiếp
                     blocks = page.get_text("blocks")
+                    sorted_b = _sort_blocks(blocks, layout_mode, page_width)
                     page_lines = []
                     
-                    for b in blocks:
+                    for b in sorted_b:
                         b_text = b[4].strip()
                         if b_text:
                             for line in b_text.split('\n'):
@@ -674,7 +729,7 @@ def fastapi_app():
                         img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
                         
                         if img is not None:
-                            page_lines = _ocr_with_preprocessing(ocr, img)
+                            page_lines = _ocr_with_preprocessing(ocr, img, layout_mode)
                             for line in page_lines:
                                 line["page"] = page_idx + 1
                                 
@@ -687,7 +742,7 @@ def fastapi_app():
                 if img is None:
                     raise HTTPException(status_code=400, detail="Invalid image format")
                     
-                all_lines = _ocr_with_preprocessing(ocr, img)
+                all_lines = _ocr_with_preprocessing(ocr, img, layout_mode)
                 box_count = len(all_lines)
             
             raw_text = "\n".join([l["text"] for l in all_lines])
