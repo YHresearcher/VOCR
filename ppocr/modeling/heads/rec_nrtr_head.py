@@ -119,7 +119,6 @@ class Transformer(nn.Layer):
 
     def forward_train(self, src, tgt):
         tgt = tgt[:, :-1]
-        print(f"[EMBED_DIAG] dtype={tgt.dtype} place={tgt.place} shape={tgt.shape} vals={tgt[0].numpy().tolist()[:8]}", flush=True)
         tgt = self.embedding(tgt)
         tgt = self.positional_encoding(tgt)
         tgt_mask = self.generate_square_subsequent_mask(tgt.shape[1])

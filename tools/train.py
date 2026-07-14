@@ -40,6 +40,7 @@ from ppocr.modeling.architectures import apply_to_static
 import tools.program as program
 import tools.naive_sync_bn as naive_sync_bn
 
+
 dist.get_world_size()
 
 

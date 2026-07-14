@@ -14,6 +14,7 @@ ocr_image = (
         "LD_LIBRARY_PATH": "/usr/local/cuda/lib64:/usr/lib/x86_64-linux-gnu"
     })
     .pip_install(
+        "numpy==1.26.4", # Bắt buộc cài đặt NumPy 1.x để tương thích với Paddle 2.6
         "paddlepaddle-gpu==2.6.0", # Cài đặt Paddle tương thích với T4/CUDA 11.8
         "imaug",
         "fastapi[standard]", # Bắt buộc cho các hàm fastapi_endpoint trong các bản Modal mới
@@ -227,7 +228,7 @@ def test_env():
     print("=== ENVIRONMENT DIAGNOSTICS ===")
     print("Python version:", sys.version)
     print("Working directory:", os.getcwd())
-    
+
     dict_path = "ppocr/utils/dict/vi_custom_dict.txt"
     train_list_path = "/vol/train_data/train_list.txt"
     val_list_path = "/vol/train_data/val_list.txt"
