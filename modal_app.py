@@ -191,8 +191,8 @@ class VietnameseCorrector:
     def load(self):
         """Load the Vietnamese correction model from HuggingFace."""
         try:
-            from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-            import torch
+            from transformers import AutoTokenizer, AutoModelForSeq2SeqLM  # type: ignore
+            import torch  # type: ignore
             
             model_name = "MinhDucNguyen9705/vietnamese-correction-2.0-ocr"
             print(f"Đang tải mô hình sửa lỗi tiếng Việt từ {model_name}...")
@@ -219,7 +219,7 @@ class VietnameseCorrector:
         if not self.ready or not text or not text.strip():
             return text
         
-        import torch
+        import torch  # type: ignore
         
         try:
             # Process text line by line to avoid truncation
@@ -304,7 +304,7 @@ class OCRService:
     @modal.enter()
     def load_model(self):
         """Khởi tạo PaddleOCR + Correction model một lần duy nhất khi container start."""
-        from paddleocr import PaddleOCR
+        from paddleocr import PaddleOCR  # type: ignore
         
         custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
         custom_det_dir = "/vol/inference/vi_PP-OCRv5_server_det"
@@ -517,7 +517,7 @@ def fastapi_app():
     from contextlib import asynccontextmanager
     import numpy as np
     import cv2
-    import fitz  # PyMuPDF
+    import fitz  # type: ignore # PyMuPDF
     
     def _sort_blocks(blocks, layout_mode="auto", page_width=595.0):
         """Sắp xếp các block text của PDF dựa theo chế độ bố cục."""
@@ -652,7 +652,7 @@ def fastapi_app():
     async def lifespan(app: FastAPI):
         """Load PaddleOCR model on startup."""
         global ocr_model, model_type_global
-        from paddleocr import PaddleOCR
+        from paddleocr import PaddleOCR  # type: ignore
         import os as _os
         try:
             vol.reload()
@@ -708,7 +708,7 @@ def fastapi_app():
     def get_ocr_model():
         global ocr_model, model_type_global
         if ocr_model is None:
-            from paddleocr import PaddleOCR
+            from paddleocr import PaddleOCR  # type: ignore
             custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
             custom_det_dir = "/vol/inference/vi_PP-OCRv5_server_det"
             vol.reload()
