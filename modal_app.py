@@ -296,14 +296,13 @@ def apply_herbal_corrections(text: str) -> str:
     scaledown_window=300  # Giữ container sống 5 phút sau request cuối
 )
 class OCRService:
-    def __init__(self):
-        self.ocr = None
-        self.model_type = None
-        self.corrector = VietnameseCorrector()
-    
     @modal.enter()
     def load_model(self):
         """Khởi tạo PaddleOCR + Correction model một lần duy nhất khi container start."""
+        self.ocr = None
+        self.model_type = None
+        self.corrector = VietnameseCorrector()
+        
         from paddleocr import PaddleOCR  # type: ignore
         
         custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
@@ -313,7 +312,10 @@ class OCRService:
         vol.reload()
         
         # PaddleOCR 2.9.1 API: truyền rec_model_dir để load fine-tuned model
-        ocr_kwargs = dict(use_angle_cls=True, lang="vi", use_gpu=True, show_log=False)
+        ocr_kwargs = dict(
+            use_angle_cls=True, lang="vi", use_gpu=True, show_log=False,
+            det_limit_side_len=1920,  # Hỗ trợ ảnh độ phân giải cao (default 960)
+        )
         
         if os.path.exists(custom_rec_dir) and os.listdir(custom_rec_dir):
             print(f"Đang tải mô hình rec fine-tuned tại: {custom_rec_dir}")
@@ -390,8 +392,8 @@ class OCRService:
         # 2. Chuyển sang grayscale
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         
-        # 3. Denoise
-        denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+        # 3. Denoise (h=7 giữ chi tiết chữ tốt hơn h=10)
+        denoised = cv2.fastNlMeansDenoising(gray, h=7, templateWindowSize=7, searchWindowSize=21)
         
         # 4. Phân tích sự đồng nhất của nền để phân biệt ảnh scan sạch vs ảnh phức tạp
         h_g, w_g = denoised.shape
@@ -421,17 +423,17 @@ class OCRService:
                 C=8
             )
             
-            # 7. Morphological opening để loại bỏ noise nhỏ (kernel nhỏ)
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+            # 7. Morphological opening kernel 2x2 để loại bỏ noise nhỏ mà không mất nét chữ
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
             cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
             
             return cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
         else:
-            # Ảnh phức tạp: CLAHE + Unsharp Mask nhẹ, giữ thông tin grayscale cho PaddleOCR
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            # Ảnh phức tạp: CLAHE + Unsharp Mask, giữ thông tin grayscale cho PaddleOCR
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(denoised)
             blurred = cv2.GaussianBlur(enhanced, (0, 0), 3)
-            sharpened = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
+            sharpened = cv2.addWeighted(enhanced, 1.8, blurred, -0.8, 0)
             return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
     
     @modal.fastapi_endpoint(method="POST")
@@ -613,7 +615,7 @@ def fastapi_app():
             scale = 1200.0 / min_dim
             img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
+        denoised = cv2.fastNlMeansDenoising(gray, h=7, templateWindowSize=7, searchWindowSize=21)
         
         # Phân tích sự đồng nhất của nền để phân biệt ảnh scan sạch vs ảnh phức tạp
         # Lấy mẫu viền ảnh (giữa các cạnh, tránh góc) để đánh giá nền
@@ -635,17 +637,17 @@ def fastapi_app():
             clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(denoised)
             binary = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, blockSize=15, C=8)
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
             cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
             return cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
         else:
             # Tiền xử lý nhẹ cho ảnh phức tạp (ảnh chụp, nền không đều)
             # Chỉ dùng CLAHE + Unsharp Mask, giữ thông tin grayscale cho PaddleOCR
-            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
             enhanced = clahe.apply(denoised)
-            # Unsharp mask nhẹ để tăng độ sắc nét chữ mà không phá hủy thông tin
+            # Unsharp mask để tăng độ sắc nét chữ
             blurred = cv2.GaussianBlur(enhanced, (0, 0), 3)
-            sharpened = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
+            sharpened = cv2.addWeighted(enhanced, 1.8, blurred, -0.8, 0)
             return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
     @asynccontextmanager
@@ -656,7 +658,10 @@ def fastapi_app():
         import os as _os
         try:
             vol.reload()
-            ocr_kwargs = dict(use_angle_cls=True, lang="vi", use_gpu=True, show_log=False)
+            ocr_kwargs = dict(
+                use_angle_cls=True, lang="vi", use_gpu=True, show_log=False,
+                det_limit_side_len=1920,
+            )
             custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
             custom_det_dir = "/vol/inference/vi_PP-OCRv5_server_det"
             if _os.path.exists(custom_rec_dir) and _os.listdir(custom_rec_dir):
@@ -712,7 +717,10 @@ def fastapi_app():
             custom_rec_dir = "/vol/inference/vi_PP-OCRv5_server_rec"
             custom_det_dir = "/vol/inference/vi_PP-OCRv5_server_det"
             vol.reload()
-            ocr_kwargs = dict(use_angle_cls=True, lang="vi", use_gpu=True, show_log=False)
+            ocr_kwargs = dict(
+                use_angle_cls=True, lang="vi", use_gpu=True, show_log=False,
+                det_limit_side_len=1920,
+            )
             if os.path.exists(custom_rec_dir) and os.listdir(custom_rec_dir):
                 print(f"Loading fine-tuned rec model from: {custom_rec_dir}")
                 ocr_kwargs["rec_model_dir"] = custom_rec_dir
