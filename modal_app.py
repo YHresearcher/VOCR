@@ -370,7 +370,12 @@ class OCRService:
         return [img]
 
     def _preprocess_image(self, img):
-        """Tiền xử lý ảnh để cải thiện chất lượng OCR, đặc biệt cho ảnh y học/thảo dược."""
+        """Tiền xử lý ảnh để cải thiện chất lượng OCR, đặc biệt cho ảnh y học/thảo dược.
+        
+        Tự động phân biệt ảnh scan sạch (nền đồng nhất) vs ảnh phức tạp (ảnh chụp, nền không đều):
+        - Ảnh scan sạch: áp dụng CLAHE + Adaptive Threshold + Morphology (xóa nền, giữ chữ)
+        - Ảnh phức tạp: chỉ áp dụng CLAHE + Unsharp Mask, giữ thông tin grayscale cho PaddleOCR
+        """
         import cv2
         import numpy as np
         
@@ -388,27 +393,46 @@ class OCRService:
         # 3. Denoise
         denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
         
-        # 4. Tăng contrast bằng CLAHE
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(denoised)
+        # 4. Phân tích sự đồng nhất của nền để phân biệt ảnh scan sạch vs ảnh phức tạp
+        h_g, w_g = denoised.shape
+        strip = max(5, min(10, h_g // 20, w_g // 20))
+        top = denoised[:strip, w_g//4:3*w_g//4].astype(np.float32).ravel()
+        bot = denoised[-strip:, w_g//4:3*w_g//4].astype(np.float32).ravel()
+        left = denoised[h_g//4:3*h_g//4, :strip].astype(np.float32).ravel()
+        right = denoised[h_g//4:3*h_g//4, -strip:].astype(np.float32).ravel()
+        border_sample = np.concatenate([top, bot, left, right])
+        bg_std = float(np.std(border_sample))
+        bg_mean = float(np.mean(border_sample))
         
-        # 5. Binarization (Adaptive threshold thay cho Otsu)
-        binary = cv2.adaptiveThreshold(
-            enhanced, 255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY,
-            blockSize=15,
-            C=8
-        )
+        # Ảnh scan sạch: nền viền đồng nhất (std thấp) và sáng (mean cao)
+        is_clean_scan = bg_std < 30 and bg_mean > 150
         
-        # 6. Morphological opening để loại bỏ noise nhỏ (kernel nhỏ)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
-        cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-        
-        # 7. Convert lại thành 3-channel vì PaddleOCR expects BGR
-        result = cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
-        
-        return result
+        if is_clean_scan:
+            # 5. Tăng contrast bằng CLAHE
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(denoised)
+            
+            # 6. Binarization (Adaptive threshold thay cho Otsu)
+            binary = cv2.adaptiveThreshold(
+                enhanced, 255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                blockSize=15,
+                C=8
+            )
+            
+            # 7. Morphological opening để loại bỏ noise nhỏ (kernel nhỏ)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+            cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+            
+            return cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+        else:
+            # Ảnh phức tạp: CLAHE + Unsharp Mask nhẹ, giữ thông tin grayscale cho PaddleOCR
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(denoised)
+            blurred = cv2.GaussianBlur(enhanced, (0, 0), 3)
+            sharpened = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
+            return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
     
     @modal.fastapi_endpoint(method="POST")
     def ocr_webhook(self, item: dict):
@@ -577,7 +601,12 @@ def fastapi_app():
         return [img]
 
     def _preprocess_image(img):
-        """Tiền xử lý ảnh để cải thiện chất lượng OCR, đặc biệt cho ảnh y học/thảo dược."""
+        """Tiền xử lý ảnh để cải thiện chất lượng OCR, đặc biệt cho ảnh y học/thảo dược.
+        
+        Tự động phân biệt ảnh scan sạch (nền đồng nhất) vs ảnh phức tạp (ảnh chụp, nền không đều):
+        - Ảnh scan sạch: áp dụng CLAHE + Adaptive Threshold + Morphology (xóa nền, giữ chữ)
+        - Ảnh phức tạp: chỉ áp dụng CLAHE + Unsharp Mask, giữ thông tin grayscale cho PaddleOCR
+        """
         h, w = img.shape[:2]
         min_dim = min(h, w)
         if min_dim < 1200:
@@ -585,12 +614,39 @@ def fastapi_app():
             img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         denoised = cv2.fastNlMeansDenoising(gray, h=10, templateWindowSize=7, searchWindowSize=21)
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(denoised)
-        binary = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, blockSize=15, C=8)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
-        cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-        return cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+        
+        # Phân tích sự đồng nhất của nền để phân biệt ảnh scan sạch vs ảnh phức tạp
+        # Lấy mẫu viền ảnh (giữa các cạnh, tránh góc) để đánh giá nền
+        h_g, w_g = denoised.shape
+        strip = max(5, min(10, h_g // 20, w_g // 20))
+        top = denoised[:strip, w_g//4:3*w_g//4].astype(np.float32).ravel()
+        bot = denoised[-strip:, w_g//4:3*w_g//4].astype(np.float32).ravel()
+        left = denoised[h_g//4:3*h_g//4, :strip].astype(np.float32).ravel()
+        right = denoised[h_g//4:3*h_g//4, -strip:].astype(np.float32).ravel()
+        border_sample = np.concatenate([top, bot, left, right])
+        bg_std = float(np.std(border_sample))
+        bg_mean = float(np.mean(border_sample))
+        
+        # Ảnh scan sạch: nền viền đồng nhất (std thấp) và sáng (mean cao)
+        is_clean_scan = bg_std < 30 and bg_mean > 150
+        
+        if is_clean_scan:
+            # Tiền xử lý mạnh cho ảnh scan: CLAHE + Adaptive Threshold + Morphology
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(denoised)
+            binary = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, blockSize=15, C=8)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 1))
+            cleaned = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
+            return cv2.cvtColor(cleaned, cv2.COLOR_GRAY2BGR)
+        else:
+            # Tiền xử lý nhẹ cho ảnh phức tạp (ảnh chụp, nền không đều)
+            # Chỉ dùng CLAHE + Unsharp Mask, giữ thông tin grayscale cho PaddleOCR
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(denoised)
+            # Unsharp mask nhẹ để tăng độ sắc nét chữ mà không phá hủy thông tin
+            blurred = cv2.GaussianBlur(enhanced, (0, 0), 3)
+            sharpened = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
+            return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
