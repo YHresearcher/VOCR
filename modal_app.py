@@ -111,10 +111,31 @@ def run_train(test_run: bool = False):
 
     # Tự động Resume nếu tìm thấy checkpoint cũ từ Epoch trước đó
     latest_checkpoint = "/vol/output/vi_PP-OCRv5_server_rec/latest.pdparams"
+    checkpoint_prefix = None
+    
     if os.path.exists(latest_checkpoint):
         print(f"Tìm thấy checkpoint cũ tại {latest_checkpoint}. Tự động Resume...")
-        # Loại bỏ đuôi .pdparams khi truyền vào Global.checkpoints của PaddleOCR
         checkpoint_prefix = "/vol/output/vi_PP-OCRv5_server_rec/latest"
+    else:
+        # Fallback to the latest epoch checkpoint
+        import glob
+        checkpoints = glob.glob("/vol/output/vi_PP-OCRv5_server_rec/iter_epoch_*.pdparams")
+        if checkpoints:
+            epochs = []
+            for ckpt in checkpoints:
+                basename = os.path.basename(ckpt)
+                try:
+                    epoch_num = int(basename.split('_')[-1].split('.')[0])
+                    epochs.append((epoch_num, ckpt))
+                except ValueError:
+                    pass
+            if epochs:
+                epochs.sort(reverse=True)
+                latest_ckpt = epochs[0][1]
+                checkpoint_prefix = latest_ckpt[:-9]  # Loại bỏ đuôi .pdparams
+                print(f"Không tìm thấy latest.pdparams. Tự động Resume từ checkpoint mới nhất: {latest_ckpt}")
+                
+    if checkpoint_prefix:
         cmd.append(f"Global.checkpoints={checkpoint_prefix}")
     
     if test_run:
@@ -149,19 +170,69 @@ def run_export():
     # Reload volume để lấy checkpoint mới nhất
     vol.reload()
     
-    best_model_path = "/vol/output/vi_PP-OCRv5_server_rec/best_accuracy"
+    # Ưu tiên tìm kiếm checkpoint theo epoch mới nhất trước
+    import glob
+    checkpoints = glob.glob("/vol/output/vi_PP-OCRv5_server_rec/iter_epoch_*.pdparams")
+    best_model_path = None
     
-    if not os.path.exists(best_model_path + ".pdparams"):
-        print(f"Không tìm thấy file checkpoint {best_model_path}.pdparams.")
-        print("Vui lòng huấn luyện model trước khi thực hiện export.")
-        return
+    if checkpoints:
+        epochs = []
+        for ckpt in checkpoints:
+            basename = os.path.basename(ckpt)
+            try:
+                epoch_num = int(basename.split('_')[-1].split('.')[0])
+                epochs.append((epoch_num, ckpt))
+            except ValueError:
+                pass
+        if epochs:
+            epochs.sort(reverse=True)
+            latest_ckpt = epochs[0][1]
+            best_model_path = latest_ckpt[:-9]  # Loại bỏ đuôi .pdparams
+            print(f"Tìm thấy checkpoint epoch mới nhất: {best_model_path}.pdparams")
+            
+    if not best_model_path:
+        # Nếu không có checkpoint theo epoch, thử dùng best_accuracy.pdparams
+        fallback_path = "/vol/output/vi_PP-OCRv5_server_rec/best_accuracy"
+        if os.path.exists(fallback_path + ".pdparams"):
+            best_model_path = fallback_path
+            print(f"Sử dụng checkpoint best_accuracy mặc định: {best_model_path}.pdparams")
+        else:
+            print("Không tìm thấy checkpoint huấn luyện nào.")
+            return
+        
+    def _detect_dict_from_checkpoint(checkpoint_path: str) -> str:
+        import paddle
+        default_dict = "ppocr/utils/dict/vi_dict.txt"
+        custom_dict = "ppocr/utils/dict/vi_custom_dict.txt"
+        pdparams_path = checkpoint_path + ".pdparams"
+        if not os.path.exists(pdparams_path):
+            return default_dict
+        try:
+            params = paddle.load(pdparams_path)
+            bias_key = 'head.ctc_head.fc.bias'
+            if bias_key in params:
+                num_classes = params[bias_key].shape[0]
+                print(f"Phát hiện checkpoint có {num_classes} classes từ trọng số '{bias_key}'.")
+                if num_classes > 150: # Custom dict has 291 chars -> 293 classes
+                    return custom_dict
+                else:
+                    return default_dict
+            else:
+                print("Không tìm thấy CTC head fc.bias trong checkpoint, sử dụng từ điển chuẩn.")
+                return default_dict
+        except Exception as e:
+            print(f"Lỗi khi kiểm tra checkpoint {pdparams_path}: {e}. Sử dụng từ điển chuẩn.")
+            return default_dict
+
+    dict_path = _detect_dict_from_checkpoint(best_model_path)
+    print(f"Sử dụng từ điển tương thích: {dict_path}")
         
     cmd = [
         "python", "tools/export_model.py",
         "-c", "configs/rec/PP-OCRv5/multi_language/rec_vi_server.yml",
         "-o", f"Global.pretrained_model={best_model_path}",
         "Global.save_inference_dir=/vol/inference/vi_PP-OCRv5_server_rec",
-        "Global.character_dict_path=ppocr/utils/dict/vi_custom_dict.txt",
+        f"Global.character_dict_path={dict_path}",
         "Global.export_with_pir=False"
     ]
     try:
@@ -288,6 +359,35 @@ def apply_herbal_corrections(text: str) -> str:
     return text
 
 
+def _get_dict_path_for_model(inference_dir: str) -> str:
+    import yaml
+    import os
+    
+    default_dict = "/root/ppocr/utils/dict/vi_dict.txt"
+    custom_dict = "/root/ppocr/utils/dict/vi_custom_dict.txt"
+    
+    yml_path = os.path.join(inference_dir, "inference.yml")
+    if not os.path.exists(yml_path):
+        return default_dict
+        
+    try:
+        with open(yml_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+        
+        post_process = config.get("PostProcess", {})
+        char_dict = post_process.get("character_dict", [])
+        
+        if len(char_dict) > 150:
+            print(f"Phát hiện model được export với từ điển tùy chỉnh ({len(char_dict)} ký tự). Sử dụng vi_custom_dict.txt.")
+            return custom_dict
+        else:
+            print(f"Phát hiện model được export với từ điển chuẩn ({len(char_dict)} ký tự). Sử dụng vi_dict.txt.")
+            return default_dict
+    except Exception as e:
+        print(f"Lỗi khi phân tích inference.yml: {e}. Sử dụng từ điển chuẩn mặc định.")
+        return default_dict
+
+
 # 3. OCR Service: Class-based để giữ model trong bộ nhớ GPU giữa các request
 @app.cls(
     image=ocr_image,
@@ -320,7 +420,7 @@ class OCRService:
         if os.path.exists(custom_rec_dir) and os.listdir(custom_rec_dir):
             print(f"Đang tải mô hình rec fine-tuned tại: {custom_rec_dir}")
             ocr_kwargs["rec_model_dir"] = custom_rec_dir
-            ocr_kwargs["rec_char_dict_path"] = "/root/ppocr/utils/dict/vi_custom_dict.txt"  # POINT TO CUSTOM DICT!
+            ocr_kwargs["rec_char_dict_path"] = _get_dict_path_for_model(custom_rec_dir)
             self.model_type = "fine-tuned"
         else:
             print("Không tìm thấy mô hình fine-tuned. Sử dụng mô hình tiếng Việt mặc định...")
@@ -667,7 +767,7 @@ def fastapi_app():
             if _os.path.exists(custom_rec_dir) and _os.listdir(custom_rec_dir):
                 print(f"Đang tải mô hình rec fine-tuned tại: {custom_rec_dir}")
                 ocr_kwargs["rec_model_dir"] = custom_rec_dir
-                ocr_kwargs["rec_char_dict_path"] = "/root/ppocr/utils/dict/vi_custom_dict.txt"  # POINT TO CUSTOM DICT!
+                ocr_kwargs["rec_char_dict_path"] = _get_dict_path_for_model(custom_rec_dir)
                 model_type_global = "fine-tuned"
             else:
                 print("Sử dụng mô hình tiếng Việt mặc định...")
@@ -724,7 +824,7 @@ def fastapi_app():
             if os.path.exists(custom_rec_dir) and os.listdir(custom_rec_dir):
                 print(f"Loading fine-tuned rec model from: {custom_rec_dir}")
                 ocr_kwargs["rec_model_dir"] = custom_rec_dir
-                ocr_kwargs["rec_char_dict_path"] = "/root/ppocr/utils/dict/vi_custom_dict.txt"  # POINT TO CUSTOM DICT!
+                ocr_kwargs["rec_char_dict_path"] = _get_dict_path_for_model(custom_rec_dir)
                 model_type_global = "fine-tuned"
             else:
                 print("Loading default Vietnamese model...")
